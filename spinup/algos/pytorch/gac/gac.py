@@ -5,7 +5,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.sac.core as core
+import spinup.algos.pytorch.gac.core as core
 from spinup.utils.logx import EpochLogger
 
 
@@ -40,15 +40,13 @@ class ReplayBuffer:
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
 
-
-
-def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda'):
     """
-    Soft Actor-Critic (SAC)
+    Generative Actor-Critic (GAC)
 
 
     Args:
@@ -179,7 +177,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data):
+    def compute_loss_q(data, beta=0.05, expand_batch=200):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
@@ -194,17 +192,26 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Bellman backup for Q functions
         with torch.no_grad():
             # Target actions come from *current* policy
-            a2, logp_a2 = ac.pi(o2)
+            a2 = ac_targ.pi(o2)
 
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
             q2_pi_targ = ac_targ.q2(o2, a2)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-            backup = r + gamma * (1 - d) * (q_pi_targ - alpha * logp_a2)
+            backup = r + gamma * (1 - d) * q_pi_targ
+
+            o3 = o2.repeat(expand_batch, 1)
+            a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
+            q1_pi_targ = ac_targ.q1(o3, a3)
+            q2_pi_targ = ac_targ.q2(o3, a3)
+            q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
+            q_pi_targ2 = alpha * (act_dim * np.log(2) 
+                        + (q_pi_targ2 / alpha).exp().reshape(expand_batch, -1).mean(dim=0).log().clamp(-20, 20))
+            backup2 = r + gamma * (1 - d) * q_pi_targ2
 
         # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
+        loss_q1 = ((q1 - backup)**2).mean() + beta * ((q1 - backup2)**2).mean()
+        loss_q2 = ((q2 - backup)**2).mean() + beta * ((q2 - backup2)**2).mean()
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
@@ -218,18 +225,18 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
-        pi, logp_pi = ac.pi(o)
+        pi = ac.pi(o)
         q1_pi = ac.q1(o, pi)
         q2_pi = ac.q2(o, pi)
         q_pi = torch.min(q1_pi, q2_pi)
 
         # Entropy-regularized policy loss
-        loss_pi = (alpha * logp_pi - q_pi).mean()
+        loss_pi = -q_pi.mean()
 
         # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
+        # pi_info = dict(LogPi=logp_pi.detach().numpy())
 
-        return loss_pi, pi_info
+        return loss_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
@@ -255,16 +262,15 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data)
+        loss_pi = compute_loss_pi(data)
         loss_pi.backward()
         pi_optimizer.step()
 
-        # Unfreeze Q-networks so you can optimize it at next DDPG step.
         for p in q_params:
             p.requires_grad = True
 
         # Record things
-        logger.store(LossPi=loss_pi.item(), **pi_info)
+        logger.store(LossPi=loss_pi.item())
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -274,9 +280,6 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.mul_(polyak)
                 p_targ.data.add_((1 - polyak) * p.data)
 
-#   def get_action(o, deterministic=False):
-#       return ac.act(torch.as_tensor(o, dtype=torch.float32), 
-#                     deterministic)
     def get_action(o, deterministic=False):
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         return ac_targ.act(o, deterministic)
@@ -355,7 +358,6 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', with_min_and_max=True)
             logger.log_tabular('Q2Vals', with_min_and_max=True)
-            logger.log_tabular('LogPi', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
@@ -370,7 +372,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='sac')
+    parser.add_argument('--exp_name', type=str, default='gac')
     parser.add_argument('--device', type=str, default='cuda')
     args = parser.parse_args()
 
@@ -379,7 +381,9 @@ if __name__ == '__main__':
 
     torch.set_num_threads(torch.get_num_threads())
 
-    sac(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+    gac(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
         gamma=args.gamma, seed=args.seed, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
+
+#   python -m spinup.run gac_pytorch --env HalfCheetah-v2 --exp_name sac_HalfCheetahv2
