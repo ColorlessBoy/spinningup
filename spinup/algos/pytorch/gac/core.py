@@ -30,8 +30,8 @@ class GenerativeGaussianMLPActor(nn.Module):
         self.act_dim = act_dim
         self.act_limit = act_limit
 
-    def forward(self, obs):
-        epsilon = torch.randn(obs.shape[0], self.act_dim, device=obs.device)
+    def forward(self, obs, std=1.0):
+        epsilon = std * torch.randn(obs.shape[0], self.act_dim, device=obs.device)
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
         pi_action = self.act_limit * pi_action
         return pi_action
@@ -61,11 +61,10 @@ class MLPActorCritic(nn.Module):
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
-    def act(self, obs, deterministic=False, sigma=0.2, clip=0.5):
+    def act(self, obs, deterministic=False, std=10.0):
         with torch.no_grad():
-            a = self.pi(obs)
-            if not deterministic:
-                noise = torch.randn_like(a) * sigma
-                a = a + noise.clamp(-clip, clip)
-                a.clamp_(-self.act_limit, self.act_limit)
-            return a.detach().cpu().numpy()[0]
+            if deterministic:
+                a = self.pi(obs)
+            else:
+                a = self.pi(obs, std=std)
+        return a.detach().cpu().numpy()[0]

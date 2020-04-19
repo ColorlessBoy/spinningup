@@ -44,10 +44,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda'):
+        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=200):
     """
     Generative Actor-Critic (GAC)
-
 
     Args:
         env_fn : A function which creates a copy of the environment.
@@ -248,7 +247,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update(data):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
+        loss_q, q_info = compute_loss_q(data, expand_batch=expand_batch)
         loss_q.backward()
         q_optimizer.step()
 
@@ -305,10 +304,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
-        if t > start_steps:
-            a = get_action(o)
-        else:
+        if t <= start_steps:
             a = env.action_space.sample()
+        else:
+            a = get_action(o, deterministic=False)
 
         # Step the env
         o2, r, d, _ = env.step(a)
@@ -318,6 +317,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
         # that isn't based on the agent's state)
+
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
