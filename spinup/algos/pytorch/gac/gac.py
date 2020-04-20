@@ -44,7 +44,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=200):
+        logger_kwargs=dict(), save_freq=1, 
+        device='cuda', expand_batch=200, beta=0.05):
     """
     Generative Actor-Critic (GAC)
 
@@ -199,14 +200,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * q_pi_targ
 
-            o3 = o2.repeat(expand_batch, 1)
-            a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
-            q1_pi_targ = ac_targ.q1(o3, a3)
-            q2_pi_targ = ac_targ.q2(o3, a3)
-            q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
-            q_pi_targ2 = alpha * (act_dim * np.log(2) 
-                        + (q_pi_targ2 / alpha).exp().reshape(expand_batch, -1).mean(dim=0).log().clamp(-20, 20))
-            backup2 = r + gamma * (1 - d) * q_pi_targ2
+            if beta > 0.0:
+                o3 = o2.repeat(expand_batch, 1)
+                a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
+                q1_pi_targ = ac_targ.q1(o3, a3)
+                q2_pi_targ = ac_targ.q2(o3, a3)
+                q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
+                q_pi_targ2 = alpha * (act_dim * np.log(2) 
+                            + (q_pi_targ2 / alpha).exp().reshape(expand_batch, -1).mean(dim=0).log().clamp(-20, 20))
+                backup2 = r + gamma * (1 - d) * q_pi_targ2
+            else:
+                backup2 = backup
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean() + beta * ((q1 - backup2)**2).mean()
@@ -247,7 +251,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update(data):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data, expand_batch=expand_batch)
+        loss_q, q_info = compute_loss_q(data, beta=beta, expand_batch=expand_batch)
         loss_q.backward()
         q_optimizer.step()
 
