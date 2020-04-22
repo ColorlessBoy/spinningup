@@ -19,6 +19,7 @@ from spinup.algos.pytorch.trpo.trpo import trpo as trpo_pytorch
 from spinup.algos.pytorch.vpg.vpg import vpg as vpg_pytorch
 
 from spinup.algos.pytorch.gac.gac import gac as gac_pytorch
+from spinup.algos.pytorch.avggac.avggac import avggac as avggac_pytorch
 
 # Loggers
 from spinup.utils.logx import Logger, EpochLogger

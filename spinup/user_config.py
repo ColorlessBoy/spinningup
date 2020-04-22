@@ -10,7 +10,8 @@ DEFAULT_BACKEND = {
     'ddpg': 'pytorch',
     'td3': 'pytorch',
     'sac': 'pytorch',
-    'gac': 'pytorch'
+    'gac': 'pytorch',
+    'avggac': 'pytorch'
 }
 
 # Where experiment outputs are saved by default:
