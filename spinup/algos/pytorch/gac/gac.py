@@ -251,7 +251,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 q_pi_targ = q_pi.detach()
 
         # 1D-Wasserstein Distance
-        w_entropy = ((q_pi - q_pi_targ)**2.mean(dim=0)+1e-10).sqrt()
+        w_entropy = (((q_pi - q_pi_targ)**2).mean(dim=0)+1e-10).sqrt()
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + beta*w_entropy.mean()
