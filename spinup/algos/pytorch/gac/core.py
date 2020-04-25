@@ -6,6 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
+def _weight_init(module):
+    if isinstance(module, nn.Linear):
+        torch.nn.init.xavier_normal_(module.weight, gain=0.1)
+        module.bias.data.zero_()
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -29,6 +33,7 @@ class GenerativeGaussianMLPActor(nn.Module):
         self.net = mlp([obs_dim+act_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
         self.act_dim = act_dim
         self.act_limit = act_limit
+        self.apply(_weight_init)
 
     def forward(self, obs, std=1.0):
         epsilon = std * torch.randn(obs.shape[0], self.act_dim, device=obs.device)
@@ -41,6 +46,7 @@ class MLPQFunction(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
+        self.apply(_weight_init)
 
     def forward(self, obs, act):
         q = self.q(torch.cat([obs, act], dim=-1))
@@ -49,7 +55,7 @@ class MLPQFunction(nn.Module):
 class MLPActorCritic(nn.Module):
 
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.ReLU):
+                 activation=nn.LeakyReLU):
         super().__init__()
 
         obs_dim = observation_space.shape[0]

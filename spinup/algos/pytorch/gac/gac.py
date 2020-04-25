@@ -42,10 +42,10 @@ class ReplayBuffer:
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=0.5, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
+        polyak=0.995, pi_lr=1.0, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
-        device='cuda', expand_batch=200, beta=0.05):
+        device='cuda', expand_batch=100, beta=0.0, warmup_steps=0):
     """
     Generative Actor-Critic (GAC)
 
@@ -147,11 +147,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
+    env, test_env = env_fn(), env_fn()
+
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
+    env.seed(seed)
+    test_env.seed(seed)
 
-    env, test_env = env_fn(), env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
 
@@ -177,7 +180,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data, beta=0.05, expand_batch=200):
+    def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
@@ -200,21 +203,21 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * q_pi_targ
 
-            if beta > 0.0:
-                o3 = o2.repeat(expand_batch, 1)
-                a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
-                q1_pi_targ = ac_targ.q1(o3, a3)
-                q2_pi_targ = ac_targ.q2(o3, a3)
-                q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
-                q_pi_targ2 = alpha * (act_dim * np.log(2) 
-                            + (q_pi_targ2 / alpha).exp().reshape(expand_batch, -1).mean(dim=0).log().clamp(-20, 20))
-                backup2 = r + gamma * (1 - d) * q_pi_targ2
-            else:
-                backup2 = backup
+#           if beta > 0.0:
+#               o3 = o2.repeat(expand_batch, 1)
+#               a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
+#               q1_pi_targ = ac_targ.q1(o3, a3)
+#               q2_pi_targ = ac_targ.q2(o3, a3)
+#               q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
+#               q_pi_targ2 = alpha * (act_dim * np.log(2) 
+#                           + (q_pi_targ2 / alpha).exp().view(expand_batch, -1).mean(dim=0).log().clamp(-20, 20))
+#               backup2 = r + gamma * (1 - d) * q_pi_targ2
+#           else:
+#               backup2 = backup
 
         # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean() + beta * ((q1 - backup2)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean() + beta * ((q2 - backup2)**2).mean()
+        loss_q1 = ((q1 - backup)**2).mean()
+        loss_q2 = ((q2 - backup)**2).mean()
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
@@ -228,13 +231,30 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
-        pi = ac.pi(o)
-        q1_pi = ac.q1(o, pi)
-        q2_pi = ac.q2(o, pi)
+        o2 = o.repeat(expand_batch, 1)
+        a2 = ac.pi(o2)
+        q1_pi = ac.q1(o2, a2)
+        q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
+        q_pi = q_pi.view(expand_batch, -1)
+        q_pi, _ = q_pi.topk(q_pi.shape[-1], dim=0)
+
+        with torch.no_grad():
+            if beta > 0.0:
+                a3 = (2 * torch.rand_like(a2) - 1) * act_limit
+                q1_pi_targ = ac_targ.q1(o2, a3)
+                q2_pi_targ = ac_targ.q2(o2, a3)
+                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+                q_pi_targ = q_pi_targ.view(expand_batch, -1)
+                q_pi_targ, _ = q_pi_targ.topk(q_pi_targ.shape[-1], dim=0)
+            else:
+                q_pi_targ = q_pi.detach()
+
+        # 1D-Wasserstein Distance
+        w_entropy = ((q_pi - q_pi_targ)**2.mean(dim=0)+1e-10).sqrt()
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean()
+        loss_pi = -q_pi.mean() + beta*w_entropy.mean()
 
         # Useful info for logging
         # pi_info = dict(LogPi=logp_pi.detach().numpy())
@@ -248,10 +268,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data):
+    def update(data, beta=0.01):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data, beta=beta, expand_batch=expand_batch)
+        loss_q, q_info = compute_loss_q(data)
         loss_q.backward()
         q_optimizer.step()
 
@@ -346,7 +366,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if t >= update_after and t % update_every == 0:
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                update(data=batch)
+                if t >= warmup_steps:
+                    update(data=batch, beta=beta)
+                else:
+                    update(data=batch, beta=0.0)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
