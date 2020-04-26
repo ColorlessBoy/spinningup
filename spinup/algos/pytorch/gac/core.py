@@ -74,3 +74,60 @@ class MLPActorCritic(nn.Module):
             else:
                 a = self.pi(obs)
         return a.detach().cpu().numpy()[0]
+
+# Maximum Mean Discrepancy
+# geomloss: https://github.com/jeanfeydy/geomloss
+
+def squared_distances(x, y):
+    if x.dim() == 2:
+        D_xx = (x*x).sum(-1).unsqueeze(1)  # (N,1)
+        D_xy = torch.matmul( x, y.permute(1,0) )  # (N,D) @ (D,M) = (N,M)
+        D_yy = (y*y).sum(-1).unsqueeze(0)  # (1,M)
+    elif x.dim() == 3:  # Batch computation
+        D_xx = (x*x).sum(-1).unsqueeze(2)  # (B,N,1)
+        D_xy = torch.matmul( x, y.permute(0,2,1) )  # (B,N,D) @ (B,D,M) = (B,N,M)
+        D_yy = (y*y).sum(-1).unsqueeze(1)  # (B,1,M)
+    else:
+        print("x.shape : ", x.shape)
+        raise ValueError("Incorrect number of dimensions")
+
+    return D_xx - 2*D_xy + D_yy
+
+def gaussian_kernel(x, y, blur=.05):
+    C2 = squared_distances(x / blur, y / blur)
+    return (- .5 * C2 ).exp()
+
+def laplacian_kernel(x, y, blur=.05):
+    C = distances(x / blur, y / blur)
+    return (- C ).exp()
+
+def energy_kernel(x, y, blur=None):
+    return -squared_distances(x, y)
+
+kernel_routines = {
+    "gaussian" : gaussian_kernel,
+    "laplacian": laplacian_kernel,
+    "energy"   : energy_kernel,
+}
+
+def mmd(x, y, kernel='gaussian'):
+    b = x.shape[0]
+    m = x.shape[1]
+    n = y.shape[1]
+
+    if kernel == 'energy':
+        tr_xx = torch.tensor(0.0)
+        tr_yy = torch.tensor(0.0)
+    else:
+        tr_xx = torch.tensor(1.0)
+        tr_yy = torch.tensor(1.0)
+
+    if kernel in kernel_routines:
+        kernel = kernel_routines[kernel]
+
+    K_xx = (kernel(x, x).mean()*m - tr_xx) / (m - 1)
+    K_xy = kernel(x, y).mean()
+    K_yy = (kernel(y, y).mean()*n - tr_yy) / (n - 1)
+
+    return K_xx + K_yy - 2*K_xy
+
