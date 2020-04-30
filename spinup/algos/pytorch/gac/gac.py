@@ -180,7 +180,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data, beta_q=0.0):
+    def compute_loss_q(data, beta_q=0.0, bias_q=1.0):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
@@ -200,10 +200,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             retain_graph=True,
             only_inputs=True,
         )[0]
-        gradients = gradients.view(gradients.size(0), -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        gradient_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean()
+        gradient_penalty = (gradient_norm - bias_q) ** 2
 
-        # Bellman backup for Q functions
+        # Bellman backup for Q functions:w
+
         with torch.no_grad():
             # Target actions come from *current* policy
             a2 = ac_targ.pi(o2)
@@ -222,12 +223,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
                       Q2Vals=q2.detach().cpu().numpy(),
-                      Q_penalty=gradient_penalty.detach().cpu().numpy())
+                      Q_penalty=gradient_norm.detach().cpu().numpy())
 
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi=0.0):
+    def compute_loss_pi(data, beta_pi=0.0, bias_pi=0.0):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -236,25 +237,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q1_pi = ac.q1(o2, a2)
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
-#       q_pi = q_pi.view(expand_batch, -1)
-#       q_pi, _ = q_pi.topk(q_pi.shape[-1], dim=0)
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1])
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
-#           q1_pi_targ = ac_targ.q1(o2, a3)
-#           q2_pi_targ = ac_targ.q2(o2, a3)
-#           q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-#           q_pi_targ = q_pi_targ.view(expand_batch, -1)
-#           q_pi_targ, _ = q_pi_targ.topk(q_pi_targ.shape[-1], dim=0)
-
-#       # 1D-Wasserstein Distance
-#       w_entropy = (((q_pi - q_pi_targ)**2).mean(dim=0)+1e-10).sqrt().mean()
 
         mmd_entropy = core.mmd(a2, a3, kernel='energy')
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
+        loss_pi = -q_pi.mean() + beta_pi*(mmd_entropy-bias_pi)**2
 
         # Useful info for logging
         pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
@@ -268,10 +259,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data, beta_pi=0.0, beta_q=0.0):
+    def update(data, beta_pi=0.0, beta_q=0.0, bias_pi=0.0, bias_q=1.0):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data, beta_q=beta_q)
+        loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
         loss_q.backward()
         q_optimizer.step()
 
@@ -285,7 +276,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi, bias_pi=bias_pi)
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -366,10 +357,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Update handling
         if t >= update_after and t % update_every == 0:
+            epoch = (t+1) // steps_per_epoch
+            bias_pi = min(epoch / 100, 2.0)
+            bias_q = 5.0
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q)
+                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_pi=bias_pi, bias_q=bias_q)
                 else:
                     update(data=batch, beta_pi=0.0, beta_q=0.0)
 

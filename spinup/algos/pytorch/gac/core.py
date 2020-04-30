@@ -8,7 +8,7 @@ from torch.distributions.normal import Normal
 
 def _weight_init(module):
     if isinstance(module, nn.Linear):
-        torch.nn.init.xavier_normal_(module.weight, gain=0.1)
+        torch.nn.init.xavier_normal_(module.weight, gain=0.01)
         module.bias.data.zero_()
 
 def combined_shape(length, shape=None):
@@ -93,20 +93,15 @@ def squared_distances(x, y):
 
     return D_xx - 2*D_xy + D_yy
 
-def gaussian_kernel(x, y, blur=.05):
+def gaussian_kernel(x, y, blur=1.0):
     C2 = squared_distances(x / blur, y / blur)
     return (- .5 * C2 ).exp()
-
-def laplacian_kernel(x, y, blur=.05):
-    C = distances(x / blur, y / blur)
-    return (- C ).exp()
 
 def energy_kernel(x, y, blur=None):
     return -squared_distances(x, y)
 
 kernel_routines = {
     "gaussian" : gaussian_kernel,
-    "laplacian": laplacian_kernel,
     "energy"   : energy_kernel,
 }
 
