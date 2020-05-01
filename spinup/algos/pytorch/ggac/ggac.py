@@ -5,7 +5,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.avggac.core as core
+import spinup.algos.pytorch.ggac.core as core
 from spinup.utils.logx import EpochLogger
 
 
@@ -40,11 +40,12 @@ class ReplayBuffer:
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
 
-def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+def ggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=0.5, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
+        polyak=0.995, pi_lr=1.0, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100):
+        logger_kwargs=dict(), save_freq=1, 
+        device='cuda', expand_batch=100, beta_pi=0.0, beta_q=0.0, warm_steps=0):
     """
     Generative Actor-Critic (GAC)
 
@@ -163,6 +164,7 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module and target networks
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
+    ac_targ.eval()
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
@@ -179,11 +181,11 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data):
+    def compute_loss_q(data, beta_q=0.0, bias_q=1.0):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
-        a = torch.FloatTensor(a).to(device)
+        a = torch.FloatTensor(a).to(device).requires_grad_(True)
         r = torch.FloatTensor(r).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
@@ -191,67 +193,65 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q1 = ac.q1(o,a)
         q2 = ac.q2(o,a)
 
-        # Bellman backup for Q functions
+        # Q Net Regularization.
+        gradients = torch.autograd.grad(
+            outputs=q1.sum()+q2.sum(),
+            inputs=a,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )[0]
+        gradient_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean()
+        gradient_penalty = (gradient_norm - bias_q) ** 2
+
+        # Bellman backup for Q functions:w
+
         with torch.no_grad():
             # Target actions come from *current* policy
-            a1 = ac_targ.pi(o2)
+            a2 = ac_targ.pi(o2)
+
             # Target Q-values
-            q1_pi_targ = ac_targ.q1(o2, a1)
-            q2_pi_targ = ac_targ.q2(o2, a1)
+            q1_pi_targ = ac_targ.q1(o2, a2)
+            q2_pi_targ = ac_targ.q2(o2, a2)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * q_pi_targ
 
-            if alpha > 0.0:
-                o3 = o2.repeat(expand_batch, 1)
-                a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
-                q1_pi_targ = ac_targ.q1(o3, a3)
-                q2_pi_targ = ac_targ.q2(o3, a3)
-                q_pi_targ2 = torch.min(q1_pi_targ, q2_pi_targ)
-                q_pi_targ2 = q_pi_targ2.reshape(expand_batch, -1).mean(dim=0)
-                backup2 = r + gamma * (1 - d) * q_pi_targ2
-            else:
-                backup2 = backup
-
         # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean() + alpha**2 * ((q1 - backup2)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean() + alpha**2 * ((q2 - backup2)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q1 = ((q1 - backup)**2).mean()
+        loss_q2 = ((q2 - backup)**2).mean()
+        loss_q = loss_q1 + loss_q2 + beta_q*gradient_penalty
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy(),
+                      Q_penalty=gradient_norm.detach().cpu().numpy())
 
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data):
+    def compute_loss_pi(data, beta_pi=0.0, bias_pi=0.0):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
-        a1 = ac.pi(o)
-        q1_pi = ac.q1(o, a1)
-        q2_pi = ac.q2(o, a1)
+        o2 = o.repeat(expand_batch, 1)
+        a2 = ac.pi(o2)
+        q1_pi = ac.q1(o2, a2)
+        q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        # Smoothed Pi Target
+        a2 = a2.view(expand_batch, -1, a2.shape[-1])
         with torch.no_grad():
-            if alpha > 0.0:
-                o3 = o.repeat(expand_batch, 1)
-                a3 = (2 * torch.rand(o3.shape[0], act_dim, device=device) - 1) * act_limit
-                q1_pi_targ = ac_targ.q1(o3, a3)
-                q2_pi_targ = ac_targ.q2(o3, a3)
-                q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-                q_pi_targ = q_pi_targ.reshape(expand_batch, -1).mean(dim=0)
-            else:
-                q_pi_targ = q_pi
+            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
+
+        mmd_entropy = core.mmd(a2, a3, kernel='energy')
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + alpha * (((q_pi - q_pi_targ)**2).mean()+1e-10).sqrt()
+        loss_pi = -q_pi.mean() + beta_pi*(mmd_entropy-bias_pi)**2
 
         # Useful info for logging
-        # pi_info = dict(LogPi=logp_pi.detach().numpy())
+        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
-        return loss_pi
+        return loss_pi, pi_info
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
@@ -260,10 +260,10 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data):
+    def update(data, beta_pi=0.0, beta_q=0.0, bias_pi=0.0, bias_q=1.0):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
+        loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
         loss_q.backward()
         q_optimizer.step()
 
@@ -277,7 +277,7 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi = compute_loss_pi(data)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi, bias_pi=bias_pi)
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -285,7 +285,7 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             p.requires_grad = True
 
         # Record things
-        logger.store(LossPi=loss_pi.item())
+        logger.store(LossPi=loss_pi.item(), **pi_info)
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -301,10 +301,11 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.mul_((1 - pi_lr))
                 p_targ.data.add_(pi_lr * p.data)
 
-
     def get_action(o, deterministic=False):
+        batch = replay_buffer.sample_batch(batch_size)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        return ac_targ.act(o, deterministic)
+        a = ac_targ.act(o, deterministic)
+        return a
 
     def test_agent():
         for j in range(num_test_episodes):
@@ -357,9 +358,15 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Update handling
         if t >= update_after and t % update_every == 0:
+            epoch = (t+1) // steps_per_epoch
+            bias_pi = min(epoch / 100, 2.0)
+            bias_q = 5.0
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                update(data=batch)
+                if t >= warm_steps:
+                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_pi=bias_pi, bias_q=bias_q)
+                else:
+                    update(data=batch, beta_pi=0.0, beta_q=0.0)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -383,6 +390,8 @@ def avggac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
+            logger.log_tabular('pi_penalty', with_min_and_max=True)
+            logger.log_tabular('Q_penalty', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
@@ -409,4 +418,4 @@ if __name__ == '__main__':
         gamma=args.gamma, seed=args.seed, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
 
-#   python -m spinup.run avggac_pytorch --env HalfCheetah-v3
+#   python -m spinup.run gac_pytorch --env HalfCheetah-v2 --exp_name sac_HalfCheetahv2
