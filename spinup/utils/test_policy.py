@@ -7,6 +7,7 @@ import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
 
+device = torch.device('cuda')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -95,13 +96,13 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
     fname = osp.join(fpath, 'pyt_save', 'model'+itr+'.pt')
     print('\n\nLoading from %s.\n\n'%fname)
 
-    model = torch.load(fname)
+    model = torch.load(fname).to(device)
 
     # make function for producing an action given a single state
-    def get_action(x):
+    def get_action(o):
         with torch.no_grad():
-            x = torch.as_tensor(x, dtype=torch.float32)
-            action = model.act(x)
+            o = torch.FloatTensor(o.reshape(1, -1)).to(device)
+            action = model.act(o)
         return action
 
     return get_action
@@ -116,6 +117,8 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
     logger = EpochLogger()
     o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
+
+    f = open('./test.txt', 'w')
     while n < num_episodes:
         if render:
             env.render()
@@ -125,6 +128,13 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         o, r, d, _ = env.step(a)
         ep_ret += r
         ep_len += 1
+
+        if ep_len == 100:
+            for _ in range(10):
+                a = get_action(o)
+                f.write(','.join(str(b) for b in a[0]))
+                f.write('\n')
+            f.write('\n')
 
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
