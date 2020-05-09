@@ -45,7 +45,7 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
          steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
          polyak=0.995, pi_lr=1e-3, q_lr=1e-3, batch_size=100, start_steps=10000, 
          update_after=1000, update_every=50, act_noise=0.1, num_test_episodes=10, 
-         max_ep_len=1000, logger_kwargs=dict(), save_freq=1):
+         max_ep_len=1000, logger_kwargs=dict(), save_freq=1, device='cuda'):
     """
     Deep Deterministic Policy Gradient (DDPG)
 
@@ -130,13 +130,19 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     """
 
+    device = torch.device(device)
+
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
     env, test_env = env_fn(), env_fn()
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    env.seed(seed)
+    test_env.seed(seed)
+
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
 
@@ -144,7 +150,7 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_limit = env.action_space.high[0]
 
     # Create actor-critic module and target networks
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -162,6 +168,12 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
+        o = torch.FloatTensor(o).to(device)
+        a = torch.FloatTensor(a).to(device)
+        r = torch.FloatTensor(r).to(device)
+        o2 = torch.FloatTensor(o2).to(device)
+        d = torch.FloatTensor(d).to(device)
+
         q = ac.q(o,a)
 
         # Bellman backup for Q function
@@ -173,13 +185,14 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_q = ((q - backup)**2).mean()
 
         # Useful info for logging
-        loss_info = dict(QVals=q.detach().numpy())
+        loss_info = dict(QVals=q.detach().cpu().numpy())
 
         return loss_q, loss_info
 
     # Set up function for computing DDPG pi loss
     def compute_loss_pi(data):
         o = data['obs']
+        o = torch.FloatTensor(o).to(device)
         q_pi = ac.q(o, ac.pi(o))
         return -q_pi.mean()
 
@@ -224,7 +237,8 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_((1 - polyak) * p.data)
 
     def get_action(o, noise_scale):
-        a = ac.act(torch.as_tensor(o, dtype=torch.float32))
+        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
+        a = ac.act(o)
         a += noise_scale * np.random.randn(act_dim)
         return np.clip(a, -act_limit, act_limit)
 

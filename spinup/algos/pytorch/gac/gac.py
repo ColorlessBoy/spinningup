@@ -303,7 +303,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_(pi_lr * p.data)
 
     def get_action(o, deterministic=False):
-        batch = replay_buffer.sample_batch(batch_size)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic)
         return a
