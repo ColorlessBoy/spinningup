@@ -120,10 +120,14 @@ def mmd(x, y, kernel='gaussian'):
     return K_xx + K_yy - 2*K_xy
 
 if __name__ == '__main__':
+    max_z = 0
     min_z = 100
-    for _ in range(100):
-        x = torch.randn(100, 3)
-        y = torch.randn(100, 3)
+    batch = 200
+    for _ in range(1000):
+        x = torch.randn(batch, 3)
+        y = torch.randn(batch, 3)
         z = mmd(x, y, kernel='energy')
+        max_z = max(max_z, z)
         min_z = min(min_z, z)
+    print(max_z)
     print(min_z)
