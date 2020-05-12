@@ -110,19 +110,20 @@ def mmd(x, y, kernel='gaussian'):
     m = x.shape[1]
     n = y.shape[1]
 
-    if kernel == 'energy':
-        tr_xx = torch.tensor(0.0)
-        tr_yy = torch.tensor(0.0)
-    else:
-        tr_xx = torch.tensor(1.0)
-        tr_yy = torch.tensor(1.0)
-
     if kernel in kernel_routines:
         kernel = kernel_routines[kernel]
 
-    K_xx = (kernel(x, x).mean()*m - tr_xx) / (m - 1)
+    K_xx = kernel(x, x).mean()
     K_xy = kernel(x, y).mean()
-    K_yy = (kernel(y, y).mean()*n - tr_yy) / (n - 1)
+    K_yy = kernel(y, y).mean()
 
     return K_xx + K_yy - 2*K_xy
 
+if __name__ == '__main__':
+    min_z = 100
+    for _ in range(100):
+        x = torch.randn(100, 3)
+        y = torch.randn(100, 3)
+        z = mmd(x, y, kernel='energy')
+        min_z = min(min_z, z)
+    print(min_z)
