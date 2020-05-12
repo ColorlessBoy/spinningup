@@ -46,7 +46,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        beta_pi=0.1, beta_q=0.2, max_bias_pi=1.0, max_bias_q=5.0,
+        beta_pi=1.0, beta_q=0.5, max_bias_q=5.0,
         warm_steps=0):
     """
     Generative Actor-Critic (GAC)
@@ -230,7 +230,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi=0.0, bias_pi=0.0):
+    def compute_loss_pi(data, beta_pi=0.0):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -247,7 +247,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mmd_entropy = core.mmd(a2, a3, kernel='energy')
 
         # Entropy-regularized policy loss
-        # loss_pi = -q_pi.mean() + beta_pi*(mmd_entropy-bias_pi)**2
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
 
         # Useful info for logging
@@ -262,7 +261,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data, beta_pi=0.0, beta_q=0.0, bias_pi=0.0, bias_q=1.0):
+    def update(data, beta_pi=1.0, beta_q=0.5, bias_q=5.0):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
@@ -279,7 +278,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi, bias_pi=bias_pi)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -360,12 +359,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
+<<<<<<< HEAD
             bias_pi = min(epoch/100, max_bias_pi)
             bias_q  = min(epoch/20,  max_bias_q )
+=======
+            bias_q  = max_bias_q
+>>>>>>> 8b6e9d69960fe462d2dc0fe3c6997e2f5031250b
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_pi=bias_pi, bias_q=bias_q)
+                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
                 else:
                     update(data=batch, beta_pi=0.0, beta_q=0.0)
 

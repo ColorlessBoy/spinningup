@@ -7,6 +7,10 @@ import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph
 
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import animation
+
 device = torch.device('cuda')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
@@ -102,6 +106,8 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
         with torch.no_grad():
             o = torch.FloatTensor(o.reshape(1, -1)).to(device)
             action = model.act(o, deterministic)
+        if 'gac' not in fpath:
+            action = action[0]
         return action
 
     return get_action
@@ -113,29 +119,53 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
-    logger = EpochLogger()
-    o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
 
-    while n < num_episodes:
-        if render:
-            env.render()
-            time.sleep(1e-3)
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    dots = [ax.plot([], [], 'ro', alpha=0.2)[0] for ax in axs]
 
-        a = get_action(o)
-        o, r, d, _ = env.step(a)
-        ep_ret += r
-        ep_len += 1
+    def init():
+        for ax in axs:
+            ax.set_xlim(-1.01, 1.01)
+            ax.set_ylim(-1.01, 1.01)
+            ax.grid()
 
-        if d or (ep_len == max_ep_len):
-            logger.store(EpRet=ep_ret, EpLen=ep_len)
-            print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            n += 1
+    def gen_dot():
+        o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
+        logger = EpochLogger()
+        while n < num_episodes:
+            if render:
+                env.render()
+                time.sleep(1e-3)
 
-    logger.log_tabular('EpRet', with_min_and_max=True)
-    logger.log_tabular('EpLen', average_only=True)
-    logger.dump_tabular()
+            a = get_action(o)
+            o, r, d, _ = env.step(a)
+            ep_ret += r
+            ep_len += 1
 
+            actions = []
+            for _ in range(1000):
+                actions.append(get_action(o))
+            yield np.array(actions)
+
+            if d or (ep_len == max_ep_len):
+                logger.store(EpRet=ep_ret, EpLen=ep_len)
+                print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
+                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                n += 1
+
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.dump_tabular()
+
+    def update_dot(actions):
+        dots[0].set_data(actions[:, 0], actions[:, 1])
+        dots[1].set_data(actions[:, 0], actions[:, 2])
+        dots[2].set_data(actions[:, 1], actions[:, 2])
+        return dots
+        
+    ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 20, init_func=init)
+    print('generative')
+    ani.save('./pics/action.gif', writer='pillow', fps=2)
 
 if __name__ == '__main__':
     import argparse
