@@ -46,7 +46,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        beta_pi=1.0, beta_q=0.5, max_bias_q=5.0,
+        beta_pi=0.1, beta_q=0.5, max_bias_q=5.0,
         warm_steps=0):
     """
     Generative Actor-Critic (GAC)
@@ -182,7 +182,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data, beta_q=0.0, bias_q=1.0):
+    def compute_loss_q(data, beta_q=0.5, bias_q=5.0):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
@@ -230,7 +230,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi=0.0):
+    def compute_loss_pi(data, beta_pi=0.1):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 

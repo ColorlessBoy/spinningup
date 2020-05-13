@@ -93,7 +93,7 @@ def squared_distances(x, y):
 
     return D_xx - 2*D_xy + D_yy
 
-def gaussian_kernel(x, y, blur=1.0):
+def gaussian_kernel(x, y, blur=0.5):
     C2 = squared_distances(x / blur, y / blur)
     return (- .5 * C2 ).exp()
 
@@ -121,13 +121,17 @@ def mmd(x, y, kernel='gaussian'):
 
 if __name__ == '__main__':
     max_z = 0
+    avg_z = 0
     min_z = 100
-    batch = 200
+    batch = 1000
     for _ in range(1000):
-        x = torch.randn(batch, 3)
-        y = torch.randn(batch, 3)
-        z = mmd(x, y, kernel='energy')
+        # x = torch.randn(batch, 2)
+        x = torch.rand(batch, 2) * 2 - 1
+        y = torch.rand(batch, 2) * 2 - 1
+        z = mmd(x, y, kernel='gaussian')
+        avg_z += z
         max_z = max(max_z, z)
         min_z = min(min_z, z)
     print(max_z)
     print(min_z)
+    print(avg_z/1000.0)
