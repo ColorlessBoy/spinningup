@@ -244,7 +244,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
-        mmd_entropy = core.mmd(a2, a3, kernel='energy')
+        mmd_entropy = core.mmd(a2, a3, kernel='gaussian') * 100
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy

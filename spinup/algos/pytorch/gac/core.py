@@ -30,13 +30,13 @@ class GenerativeGaussianMLPActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
         super().__init__()
-        self.net = mlp([obs_dim+act_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
-        self.act_dim = act_dim
-        self.act_limit = act_limit
+        self.net = mlp([obs_dim+obs_dim+act_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
+        self.epsilon_dim = obs_dim+act_dim
+        self.act_limit = obs_dim+act_limit
         self.apply(_weight_init)
 
     def forward(self, obs, std=1.0):
-        epsilon = std * torch.randn(obs.shape[0], self.act_dim, device=obs.device)
+        epsilon = std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
         pi_action = self.act_limit * pi_action
         return pi_action

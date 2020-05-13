@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 
-device = torch.device('cuda')
+device = torch.device('cuda:1')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -121,7 +121,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    dots = [ax.plot([], [], 'ro', alpha=0.2)[0] for ax in axs]
+    dots = [ax.plot([], [], 'bo', alpha=0.002)[0] for ax in axs]
 
     def init():
         for ax in axs:
@@ -165,7 +165,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         
     ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 20, init_func=init)
     print('generative')
-    ani.save('./pics/action.gif', writer='pillow', fps=2)
+    ani.save('./action.gif', writer='pillow', fps=2)
 
 if __name__ == '__main__':
     import argparse
