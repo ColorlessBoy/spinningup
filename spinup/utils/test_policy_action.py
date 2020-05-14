@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 
-device = torch.device('cuda:1')
+device = torch.device('cuda')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -121,7 +121,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    dots = [ax.plot([], [], 'bo', alpha=0.002)[0] for ax in axs]
+    dots = [ax.plot([], [], 'bo', alpha=0.02)[0] for ax in axs]
 
     def init():
         for ax in axs:
