@@ -10,6 +10,7 @@ from spinup.utils.logx import restore_tf_graph
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
+from mpl_toolkits.mplot3d import Axes3D
 
 device = torch.device('cuda')
 
@@ -121,15 +122,19 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
     axis_bound = env.action_space.high[0] + 0.01
 
-    fig, axs = plt.subplots(2, 3, figsize=(15, 10))
-    axs = axs.reshape(-1)
-    dots = [ax.plot([], [], 'bo', alpha=0.02)[0] for ax in axs]
+    fig = plt.figure(figsize=(10, 10))
+    ax  = Axes3D(fig)
+    dots = ax.scatter([], [], [], 'bo', alpha=0.2)
+
+#   fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+#   axs = axs.reshape(-1)
+#   dots = [ax.plot([], [], 'bo', alpha=0.02)[0] for ax in axs]
 
     def init():
-        for ax in axs:
-            ax.set_xlim(-axis_bound, axis_bound)
-            ax.set_ylim(-axis_bound, axis_bound)
-            ax.grid()
+        ax.set_xlim(-axis_bound, axis_bound)
+        ax.set_ylim(-axis_bound, axis_bound)
+        ax.set_zlim(-axis_bound, axis_bound)
+        ax.grid()
 
     def gen_dot():
         o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
@@ -160,12 +165,13 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         logger.dump_tabular()
 
     def update_dot(actions):
-        dots[0].set_data(actions[:, 0], actions[:, 1])
-        dots[1].set_data(actions[:, 0], actions[:, 2])
-        dots[2].set_data(actions[:, 1], actions[:, 2])
-        dots[3].set_data(actions[:, 3], actions[:, 4])
-        dots[4].set_data(actions[:, 3], actions[:, 5])
-        dots[5].set_data(actions[:, 4], actions[:, 5])
+        dots._offsets3d = (actions[:, 0], actions[:, 1], actions[:, 2])
+#       dots[0].set_data(actions[:, 0], actions[:, 1])
+#       dots[1].set_data(actions[:, 0], actions[:, 2])
+#       dots[2].set_data(actions[:, 1], actions[:, 2])
+#       dots[3].set_data(actions[:, 3], actions[:, 4])
+#       dots[4].set_data(actions[:, 3], actions[:, 5])
+#       dots[5].set_data(actions[:, 4], actions[:, 5])
         return dots
         
     ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 500, init_func=init)

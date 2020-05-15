@@ -368,8 +368,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Reward Modified.
         if reward_modified:
-            if d: r -= 10
-            else: r += 1
+            if not d: 
+                r += 5
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
