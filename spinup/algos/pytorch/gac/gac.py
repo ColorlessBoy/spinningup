@@ -47,7 +47,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         beta_pi=1.0, beta_pi_velocity=0.01, beta_q=0.5, bias_q=5.0,
-        warm_steps=0):
+        warm_steps=0, reward_modified=False):
     """
     Generative Actor-Critic (GAC)
 
@@ -344,6 +344,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # that isn't based on the agent's state)
 
         d = False if ep_len==max_ep_len else d
+
+        # Reward Modified.
+        if reward_modified:
+            if d: r -= 10
+            else: r += 1
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
