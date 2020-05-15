@@ -255,7 +255,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         return loss_pi, pi_info
     
-    def init_policy(data, expand_batch=1000):
+    def init_policy(data, expand_batch=100):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -266,7 +266,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
-        mmd_entropy = core.mmd(a2, a3, kernel='gaussian') * 100
+        mmd_entropy = core.mmd(a2, a3, kernel='gaussian') * 1000
 
         # Entropy-regularized policy loss
         loss_pi = mmd_entropy
@@ -386,10 +386,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Init Policy:
         if t == update_after:
             policy_entropy = 0.0
-            for _ in range(10000):
+            for _ in range(update_after):
                 batch = replay_buffer.sample_batch(batch_size)
                 policy_entropy += init_policy(batch)
-            print("Policy Entropy: {}".format(policy_entropy/10000))
+            print("Policy Entropy: {}".format(policy_entropy/update_after))
 
         # Update handling
         if t >= update_after and t % update_every == 0:
