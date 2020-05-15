@@ -163,9 +163,9 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         dots[2].set_data(actions[:, 1], actions[:, 2])
         return dots
         
-    ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 20, init_func=init)
+    ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 500, init_func=init)
     print('generative')
-    ani.save('./pics/action.gif', writer='pillow', fps=2)
+    ani.save('./action.gif', writer='pillow', fps=2)
 
 if __name__ == '__main__':
     import argparse

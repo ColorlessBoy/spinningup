@@ -253,6 +253,27 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
+    
+    def init_policy(data, expand_batch=1000):
+        o = data['obs']
+        o = torch.FloatTensor(o).to(device)
+
+        o2 = o.repeat(expand_batch, 1)
+        a2 = ac.pi(o2)
+
+        a2 = a2.view(expand_batch, -1, a2.shape[-1])
+        with torch.no_grad():
+            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
+
+        mmd_entropy = core.mmd(a2, a3, kernel='gaussian') * 100
+
+        # Entropy-regularized policy loss
+        loss_pi = mmd_entropy
+
+        pi_optimizer.zero_grad()
+        loss_pi.backward()
+        pi_optimizer.step()
+        return loss_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
@@ -355,6 +376,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             o, ep_ret, ep_len = env.reset(), 0, 0
+
+        # Init Policy:
+        if t == update_after:
+            policy_entropy = 0.0
+            for _ in range(10000):
+                batch = replay_buffer.sample_batch(batch_size)
+                policy_entropy += init_policy(batch)
+            print("Policy Entropy: {}".format(policy_entropy/10000))
 
         # Update handling
         if t >= update_after and t % update_every == 0:
