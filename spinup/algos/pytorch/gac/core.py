@@ -30,13 +30,13 @@ class GenerativeGaussianMLPActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
         super().__init__()
-        self.net = mlp([obs_dim+act_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
-        self.act_dim = act_dim
+        self.epsilon_dim = obs_dim+act_dim
+        self.net = mlp([obs_dim+self.epsilon_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
         self.act_limit = act_limit
         self.apply(_weight_init)
 
-    def forward(self, obs, std=0.5):
-        epsilon = std * torch.randn(obs.shape[0], self.act_dim, device=obs.device)
+    def forward(self, obs, std=1.0):
+        epsilon = std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
         pi_action = self.act_limit * pi_action
         return pi_action
@@ -93,7 +93,7 @@ def squared_distances(x, y):
 
     return D_xx - 2*D_xy + D_yy
 
-def gaussian_kernel(x, y, blur=2.0):
+def gaussian_kernel(x, y, blur=0.5):
     C2 = squared_distances(x / blur, y / blur)
     return (- .5 * C2 ).exp()
 

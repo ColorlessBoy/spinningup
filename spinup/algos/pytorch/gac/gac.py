@@ -46,8 +46,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        beta_pi=0.1, beta_q=0.5, max_bias_q=5.0,
-        warm_steps=0):
+        beta_pi=1.0, beta_pi_velocity=0.01, beta_q=0.5, bias_q=5.0,
+        warm_steps=0, reward_modified=False):
     """
     Generative Actor-Critic (GAC)
 
@@ -159,6 +159,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
+    print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
@@ -230,7 +231,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi=0.1):
+    def compute_loss_pi(data, beta_pi=1.0):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -365,6 +366,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         d = False if ep_len==max_ep_len else d
 
+        # Reward Modified.
+        if reward_modified:
+            if d: r -= 10
+            else: r += 1
+
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
 
@@ -388,11 +394,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
-            bias_q  = max_bias_q
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
+                    update(data=batch, beta_pi=beta_pi+beta_pi_velocity*epoch, beta_q=beta_q, bias_q=bias_q)
                 else:
                     update(data=batch, beta_pi=0.0, beta_q=0.0)
 
