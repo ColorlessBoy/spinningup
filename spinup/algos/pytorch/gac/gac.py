@@ -47,7 +47,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         beta_pi=1.0, beta_pi_velocity=0.01, beta_q=0.5, bias_q=5.0,
-        warm_steps=0, reward_modified=False):
+        warm_steps=0, reward_modified=0.0):
     """
     Generative Actor-Critic (GAC)
 
@@ -254,27 +254,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
-    
-    def init_policy(data, expand_batch=100):
-        o = data['obs']
-        o = torch.FloatTensor(o).to(device)
-
-        o2 = o.repeat(expand_batch, 1)
-        a2 = ac.pi(o2)
-
-        a2 = a2.view(expand_batch, -1, a2.shape[-1])
-        with torch.no_grad():
-            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
-
-        mmd_entropy = core.mmd(a2, a3, kernel='gaussian') * 1000
-
-        # Entropy-regularized policy loss
-        loss_pi = mmd_entropy
-
-        pi_optimizer.zero_grad()
-        loss_pi.backward()
-        pi_optimizer.step()
-        return loss_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
@@ -367,9 +346,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Reward Modified.
-        if reward_modified:
-            if not d: 
-                r += 5
+        if not d: r += reward_modified
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
@@ -382,14 +359,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             o, ep_ret, ep_len = env.reset(), 0, 0
-
-        # Init Policy:
-        if t == update_after:
-            policy_entropy = 0.0
-            for _ in range(update_after):
-                batch = replay_buffer.sample_batch(batch_size)
-                policy_entropy += init_policy(batch)
-            print("Policy Entropy: {}".format(policy_entropy/update_after))
 
         # Update handling
         if t >= update_after and t % update_every == 0:
