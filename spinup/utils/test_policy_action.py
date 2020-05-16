@@ -113,7 +113,7 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
 
     return get_action
 
-def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
+def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, name='default'):
 
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
@@ -124,7 +124,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
     fig = plt.figure(figsize=(10, 10))
     ax  = Axes3D(fig)
-    dots = ax.scatter([], [], [], 'bo', alpha=0.2)
+    dots = ax.scatter([], [], [], 'b.', alpha=0.06)
+    dots1 = ax.scatter([], [], [], 'r.', alpha=0.02)
+    dots2 = ax.scatter([], [], [], 'r.', alpha=0.02)
+    dots3 = ax.scatter([], [], [], 'r.', alpha=0.02)
 
 #   fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 #   axs = axs.reshape(-1)
@@ -134,6 +137,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         ax.set_xlim(-axis_bound, axis_bound)
         ax.set_ylim(-axis_bound, axis_bound)
         ax.set_zlim(-axis_bound, axis_bound)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(name, fontsize='large')
         ax.grid()
 
     def gen_dot():
@@ -151,7 +158,9 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
             actions = []
             for _ in range(1000):
-                actions.append(get_action(o))
+                a = get_action(o)
+                actions.append(a)
+
             yield np.array(actions)
 
             if d or (ep_len == max_ep_len):
@@ -166,6 +175,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
     def update_dot(actions):
         dots._offsets3d = (actions[:, 0], actions[:, 1], actions[:, 2])
+        dots1._offsets3d = (actions[:, 0], actions[:, 1], -1.01)
+        dots2._offsets3d = (actions[:, 0], 1.01, actions[:, 2])
+        dots3._offsets3d = (-1.01, actions[:, 1], actions[:, 2])
+
 #       dots[0].set_data(actions[:, 0], actions[:, 1])
 #       dots[1].set_data(actions[:, 0], actions[:, 2])
 #       dots[2].set_data(actions[:, 1], actions[:, 2])
@@ -175,8 +188,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         return dots
         
     ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 500, init_func=init)
-    print('generative')
-    ani.save('./action.gif', writer='pillow', fps=2)
+    ani.save('./{}.gif'.format(name), writer='pillow', fps=2)
 
 if __name__ == '__main__':
     import argparse
@@ -187,8 +199,9 @@ if __name__ == '__main__':
     parser.add_argument('--norender', '-nr', action='store_true')
     parser.add_argument('--itr', '-i', type=int, default=-1)
     parser.add_argument('--deterministic', '-d', action='store_true')
+    parser.add_argument('--name', type=str)
     args = parser.parse_args()
     env, get_action = load_policy_and_env(args.fpath, 
                                           args.itr if args.itr >=0 else 'last',
                                           args.deterministic)
-    run_policy(env, get_action, args.len, args.episodes, not(args.norender))
+    run_policy(env, get_action, args.len, args.episodes, not(args.norender), args.name)
