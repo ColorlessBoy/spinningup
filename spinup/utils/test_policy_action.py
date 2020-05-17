@@ -175,9 +175,9 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
 
     def update_dot(actions):
         dots._offsets3d = (actions[:, 0], actions[:, 1], actions[:, 2])
-        dots1._offsets3d = (actions[:, 0], actions[:, 1], -1.01)
-        dots2._offsets3d = (actions[:, 0], 1.01, actions[:, 2])
-        dots3._offsets3d = (-1.01, actions[:, 1], actions[:, 2])
+        dots1._offsets3d = (actions[:, 0], actions[:, 1], -axis_bound)
+        dots2._offsets3d = (actions[:, 0], axis_bound, actions[:, 2])
+        dots3._offsets3d = (-axis_bound, actions[:, 1], actions[:, 2])
 
 #       dots[0].set_data(actions[:, 0], actions[:, 1])
 #       dots[1].set_data(actions[:, 0], actions[:, 2])
