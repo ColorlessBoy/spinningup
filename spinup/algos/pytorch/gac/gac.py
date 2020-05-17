@@ -47,7 +47,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         beta_pi=1.0, beta_pi_velocity=0.01, beta_q=0.5, bias_q=5.0,
-        warm_steps=0, reward_modified=0.0):
+        warm_steps=0, reward_modified=0.0, kernel='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -245,7 +245,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
-        mmd_entropy = core.mmd(a2, a3, kernel='gaussian')
+        mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
