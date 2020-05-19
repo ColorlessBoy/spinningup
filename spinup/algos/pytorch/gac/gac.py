@@ -46,7 +46,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        beta_pi=1.0, beta_pi_velocity=0.01, beta_q=0.5, bias_q=5.0,
+        beta_pi=1.0, beta_pi_velocity=0.02, max_beta_pi=5,
+        beta_q=1.0, bias_q=10.0,
         warm_steps=0, reward_modified=0.0, kernel='gaussian'):
     """
     Generative Actor-Critic (GAC)
@@ -366,9 +367,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi+beta_pi_velocity*epoch, beta_q=beta_q, bias_q=bias_q)
+                    update(data=batch, beta_pi=min(beta_pi+beta_pi_velocity*epoch, max_beta_pi), 
+                        beta_q=beta_q, bias_q=bias_q)
                 else:
-                    update(data=batch, beta_pi=0.0, beta_q=0.0)
+                    update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 from mpl_toolkits.mplot3d import Axes3D
 
-device = torch.device('cuda')
+device = torch.device('cuda:3')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
@@ -140,7 +140,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
-        ax.set_title(name, fontsize='large')
+        ax.set_title(name, fontsize='x-large')
         ax.grid()
 
     def gen_dot():
@@ -174,10 +174,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         logger.dump_tabular()
 
     def update_dot(actions):
-        dots._offsets3d = (actions[:, 0], actions[:, 1], actions[:, 2])
-        dots1._offsets3d = (actions[:, 0], actions[:, 1], -axis_bound)
-        dots2._offsets3d = (actions[:, 0], axis_bound, actions[:, 2])
-        dots3._offsets3d = (-axis_bound, actions[:, 1], actions[:, 2])
+        dots._offsets3d  = (actions[:, 0], actions[:, 1], actions[:, 2])
+        dots1._offsets3d = (actions[:, 0], actions[:, 1], -axis_bound  )
+        dots2._offsets3d = (actions[:, 0], axis_bound   , actions[:, 2])
+        dots3._offsets3d = (-axis_bound  , actions[:, 1], actions[:, 2])
 
 #       dots[0].set_data(actions[:, 0], actions[:, 1])
 #       dots[1].set_data(actions[:, 0], actions[:, 2])
