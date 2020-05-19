@@ -46,9 +46,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        beta_pi=1.0, beta_pi_velocity=0.02, max_beta_pi=5,
+        beta_pi=0.2, beta_pi_velocity=0.02, max_beta_pi=5.0,
         beta_q=1.0, bias_q=10.0,
-        warm_steps=0, reward_modified=0.0, kernel='gaussian'):
+        warm_steps=0, reward_scale=0.0, kernel='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -347,7 +347,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Reward Modified.
-        if not d: r += reward_modified
+        if not d: r *= reward_scale
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
