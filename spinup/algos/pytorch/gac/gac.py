@@ -369,7 +369,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=bias_q/10.0, bias_q =bias_q)
+                    update(data=batch, beta_pi=beta_pi, beta_q=bias_q/5.0, bias_q=bias_q)
                 else:
                     update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
 

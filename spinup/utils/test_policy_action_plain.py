@@ -192,8 +192,12 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         dots[2].set_data(actions[:, 1], actions[:, 2])
         return dots
         
-    ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 500, init_func=init)
-    ani.save('./{}.gif'.format(name), writer='pillow', fps=2)
+#   ani = animation.FuncAnimation(fig, update_dot, frames = gen_dot, interval = 500, init_func=init)
+#   ani.save('./{}.gif'.format(name), writer='pillow', fps=2)
+    init()
+    for idx, actions in enumerate(gen_dot()):
+        update_dot(actions)
+        fig.savefig('./pics/{}-{}.png'.format(name, str(idx)))
 
 if __name__ == '__main__':
     import argparse
@@ -204,7 +208,7 @@ if __name__ == '__main__':
     parser.add_argument('--norender', '-nr', action='store_true')
     parser.add_argument('--itr', '-i', type=int, default=-1)
     parser.add_argument('--deterministic', '-d', action='store_true')
-    parser.add_argument('--name', type=str)
+    parser.add_argument('--name', type=str, default='default')
     args = parser.parse_args()
     env, get_action = load_policy_and_env(args.fpath, 
                                           args.itr if args.itr >=0 else 'last',
