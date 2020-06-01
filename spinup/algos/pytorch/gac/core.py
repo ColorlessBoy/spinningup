@@ -78,6 +78,25 @@ class MLPActorCritic(nn.Module):
 # Maximum Mean Discrepancy
 # geomloss: https://github.com/jeanfeydy/geomloss
 
+class Sqrt0(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input):
+        result = input.sqrt()
+        result[input < 0] = 0
+        ctx.save_for_backward(result)
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        result, = ctx.saved_tensors
+        grad_input = grad_output / (2*result)
+        grad_input[result == 0] = 0
+        return grad_input
+
+def sqrt_0(x):
+    return Sqrt0.apply(x)
+
 def squared_distances(x, y):
     if x.dim() == 2:
         D_xx = (x*x).sum(-1).unsqueeze(1)  # (N,1)
@@ -98,7 +117,7 @@ def gaussian_kernel(x, y, blur=0.05):
     return (- .5 * C2 ).exp()
 
 def energy_kernel(x, y, blur=None):
-    return -squared_distances(x, y)
+    return -sqrt_0(squared_distances(x, y))
 
 kernel_routines = {
     "gaussian" : gaussian_kernel,
