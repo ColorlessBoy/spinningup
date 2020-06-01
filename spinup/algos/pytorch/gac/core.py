@@ -93,7 +93,7 @@ def squared_distances(x, y):
 
     return D_xx - 2*D_xy + D_yy
 
-def gaussian_kernel(x, y, blur=0.5):
+def gaussian_kernel(x, y, blur=0.05):
     C2 = squared_distances(x / blur, y / blur)
     return (- .5 * C2 ).exp()
 
