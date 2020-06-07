@@ -253,7 +253,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
 
         # Useful info for logging
-        pi_info = dict(pi_penalty=100*mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
 
