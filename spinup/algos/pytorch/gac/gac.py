@@ -47,8 +47,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
-        start_beta_q =1.0, beta_q_velocity =0.0, max_beta_q =1.0,
-        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =5.0, 
+        start_beta_q =0.1, beta_q_velocity =0.0, max_beta_q =0.1,
+        start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
         warm_steps=0, reward_scale=1.0, kernel='gaussian'):
     """
     Generative Actor-Critic (GAC)
