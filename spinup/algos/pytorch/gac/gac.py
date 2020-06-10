@@ -42,7 +42,7 @@ class ReplayBuffer:
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=1.0, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
+        polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
@@ -116,9 +116,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             close to 1.)
 
         lr (float): Learning rate (used for both policy and value learning).
-
-        alpha (float): Entropy regularization coefficient. (Equivalent to 
-            inverse of reward scale in the original SAC paper.)
 
         batch_size (int): Minibatch size for SGD.
 

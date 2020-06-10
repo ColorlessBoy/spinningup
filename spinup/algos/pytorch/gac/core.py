@@ -119,7 +119,7 @@ def gaussian_kernel(x, y, blur=1.0):
     return (- .5 * C2 ).exp()
 
 def energy_kernel(x, y, blur=None):
-    return -sqrt_0(squared_distances(x, y))
+    return -squared_distances(x, y)
 
 kernel_routines = {
     "gaussian" : gaussian_kernel,
