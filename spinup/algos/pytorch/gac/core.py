@@ -16,11 +16,11 @@ def combined_shape(length, shape=None):
         return (length,)
     return (length, shape) if np.isscalar(shape) else (length, *shape)
 
-def mlp(sizes, activation, output_activation=nn.Identity):
+def mlp(sizes, activation, output_activation=nn.Identity()):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+        layers += [nn.Linear(sizes[j], sizes[j+1]), act]
     return nn.Sequential(*layers)
 
 def count_vars(module):
@@ -32,7 +32,7 @@ class GenerativeGaussianMLPActor(nn.Module):
         super().__init__()
         self.epsilon_dim = act_dim * act_dim
         hidden_sizes[0] += self.epsilon_dim
-        self.net = mlp([obs_dim+self.epsilon_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh)
+        self.net = mlp([obs_dim+self.epsilon_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh())
         self.act_limit = act_limit
         self.apply(_weight_init)
 
@@ -57,7 +57,7 @@ class MLPQFunction(nn.Module):
 class MLPActorCritic(nn.Module):
 
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.LeakyReLU):
+                 activation=nn.LeakyReLU(negative_slope=0.2)):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
@@ -68,6 +68,8 @@ class MLPActorCritic(nn.Module):
         self.pi = GenerativeGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, self.act_limit)
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+
+        print(activation)
 
     def act(self, obs, deterministic=False):
         with torch.no_grad():
