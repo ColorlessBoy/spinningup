@@ -36,8 +36,12 @@ class GenerativeGaussianMLPActor(nn.Module):
         self.act_limit = act_limit
         self.apply(_weight_init)
 
-    def forward(self, obs, std=1.0):
-        epsilon = std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)
+    def forward(self, obs, std=1.0, noise='gaussian'):
+        if noise == 'gaussian':
+            epsilon = std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)
+        else:
+            print('uniform sample')
+            epsilon = torch.rand(obs.shape[0], self.epsilon_dim, device=obs.device) * 2 - 1
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
         pi_action = self.act_limit * pi_action
         return pi_action
@@ -71,12 +75,12 @@ class MLPActorCritic(nn.Module):
 
         print(activation)
 
-    def act(self, obs, deterministic=False):
+    def act(self, obs, deterministic=False, noise='gaussian'):
         with torch.no_grad():
             if deterministic:
-                a = self.pi(obs, std=0.5)
+                a = self.pi(obs, std=0.5, noise=noise)
             else:
-                a = self.pi(obs)
+                a = self.pi(obs, noise=noise)
         return a.detach().cpu().numpy()[0]
 
 # Maximum Mean Discrepancy

@@ -48,8 +48,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         device='cuda', expand_batch=100, 
         start_beta_pi=5.0, beta_pi_velocity=0.0, max_beta_pi=5.0,
         start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
-        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =5.0, 
-        warm_steps=0, reward_scale=1.0, kernel='gaussian'):
+        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
+        warm_steps=0, reward_scale=1.0, kernel='gaussian', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -304,7 +304,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def get_action(o, deterministic=False):
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        a = ac_targ.act(o, deterministic)
+        a = ac_targ.act(o, deterministic, noise=noise)
         return a
 
     def test_agent():
