@@ -8,7 +8,7 @@ from torch.distributions.normal import Normal
 
 def _weight_init(module):
     if isinstance(module, nn.Linear):
-        torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+        torch.nn.init.xavier_normal_(module.weight, gain=0.01)
         module.bias.data.zero_()
 
 def combined_shape(length, shape=None):
