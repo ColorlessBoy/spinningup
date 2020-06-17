@@ -317,6 +317,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_(pi_lr * p.data)
 
     def get_action(o, deterministic=False):
+        # o = replay_buffer.obs_encoder(o)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
         return a
@@ -365,7 +366,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         replay_buffer.store(o, a, r, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-        ac_targ.obs_mean = ac.obs_std
+        ac_targ.obs_std = ac.obs_std
         ac_targ.obs_mean = ac.obs_mean
 
         # Super critical, easy to overlook step: make sure to update 

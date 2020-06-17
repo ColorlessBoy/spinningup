@@ -8,7 +8,7 @@ from torch.distributions.normal import Normal
 
 def _weight_init(module):
     if isinstance(module, nn.Linear):
-        torch.nn.init.orthogonal(module.weight, gain=1.0)
+        torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
         module.bias.data.zero_()
 
 def combined_shape(length, shape=None):
@@ -72,12 +72,12 @@ class MLPActorCritic(nn.Module):
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
-        self.obs_mean = 0.0
-        self.obs_std = 0.0
+        self.obs_mean = torch.FloatTensor([0.0])
+        self.obs_std = torch.FloatTensor([0.0])
         self.obs_limit = obs_limit
 
     def act(self, obs, deterministic=False, noise='gaussian'):
-        obs = ((obs - self.obs_mean)/(self.obs_std + 1e-8)).clamp(-self.obs_limit, self.obs_limit)
+        obs = ((obs - self.obs_mean.to(obs.device))/(self.obs_std.to(obs.device) + 1e-8)).clamp(-self.obs_limit, self.obs_limit)
         with torch.no_grad():
             if deterministic:
                 a = self.pi(obs, std=0.5, noise=noise)

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 from mpl_toolkits.mplot3d import Axes3D
 
-device = torch.device('cuda:3')
+device = torch.device('cuda:0')
 
 def load_policy_and_env(fpath, itr='last', deterministic=False):
     """
