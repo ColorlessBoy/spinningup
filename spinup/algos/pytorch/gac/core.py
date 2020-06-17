@@ -60,7 +60,7 @@ class MLPQFunction(nn.Module):
 class MLPActorCritic(nn.Module):
 
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.LeakyReLU(negative_slope=0.2)):
+                 activation=nn.LeakyReLU(negative_slope=0.2), obs_limit=5.0):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
@@ -72,9 +72,12 @@ class MLPActorCritic(nn.Module):
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
-        print(activation)
+        self.obs_mean = 0.0
+        self.obs_std = 0.0
+        self.obs_limit = obs_limit
 
     def act(self, obs, deterministic=False, noise='gaussian'):
+        obs = ((obs - self.obs_mean)/(self.obs_std + 1e-8)).clamp(-self.obs_limit, self.obs_limit)
         with torch.no_grad():
             if deterministic:
                 a = self.pi(obs, std=0.5, noise=noise)

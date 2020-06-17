@@ -52,7 +52,7 @@ class ReplayBuffer:
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
-        return (np.array(o) - self.obs_mean)/(self.obs_std + 1e-8).clip(-self.obs_limit, self.obs_limit)
+        return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
@@ -317,7 +317,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_(pi_lr * p.data)
 
     def get_action(o, deterministic=False):
-        o = replay_buffer.obs_encoder(o)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
         return a
@@ -364,6 +363,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
+        ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
+        ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
+        ac_targ.obs_mean = ac.obs_std
+        ac_targ.obs_mean = ac.obs_mean
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
