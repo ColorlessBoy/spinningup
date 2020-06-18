@@ -36,9 +36,9 @@ class GenerativeGaussianMLPActor(nn.Module):
         self.act_limit = act_limit
         self.apply(_weight_init)
 
-    def forward(self, obs, std=1.0, noise='gaussian'):
+    def forward(self, obs, std=1.0, noise='gaussian', epsilon_limit=5.0):
         if noise == 'gaussian':
-            epsilon = std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)
+            epsilon = (std * torch.randn(obs.shape[0], self.epsilon_dim, device=obs.device)).clamp(-epsilon_limit, epsilon_limit)
         else:
             epsilon = torch.rand(obs.shape[0], self.epsilon_dim, device=obs.device) * 2 - 1
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
@@ -60,7 +60,7 @@ class MLPQFunction(nn.Module):
 class MLPActorCritic(nn.Module):
 
     def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
-                 activation=nn.LeakyReLU(negative_slope=0.2), obs_limit=5.0):
+                 activation=nn.LeakyReLU(negative_slope=0.2)):
         super().__init__()
 
         obs_dim = observation_space.shape[0]
@@ -74,10 +74,9 @@ class MLPActorCritic(nn.Module):
 
         self.obs_mean = torch.FloatTensor([0.0])
         self.obs_std = torch.FloatTensor([0.0])
-        self.obs_limit = obs_limit
 
-    def act(self, obs, deterministic=False, noise='gaussian'):
-        obs = ((obs - self.obs_mean.to(obs.device))/(self.obs_std.to(obs.device) + 1e-8)).clamp(-self.obs_limit, self.obs_limit)
+    def act(self, obs, deterministic=False, noise='gaussian', obs_limit=5.0):
+        obs = ((obs - self.obs_mean.to(obs.device))/(self.obs_std.to(obs.device) + 1e-8)).clamp(-obs_limit, obs_limit)
         with torch.no_grad():
             if deterministic:
                 a = self.pi(obs, std=0.5, noise=noise)
