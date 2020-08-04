@@ -2,20 +2,26 @@ from copy import deepcopy
 import itertools
 import numpy as np
 import torch
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 import gym
 import time
 import spinup.algos.pytorch.shpo.core as core
 from spinup.utils.logx import EpochLogger
 
+import torch.backends.cudnn as cudnn
+from geomloss import SamplesLoss
+
 def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
     seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=1000000, 
     gamma=0.99, polyak=0.005, polyak_pi = 0.0, lr=1e-3, 
-    batch_size=100,expand_batch=100,
+    batch_size=400, expand_batch=100,
     start_steps=10000, update_after=10000, num_test_episodes=10, 
-    per_update_steps_for_actor=100, per_update_steps_for_critic=50, 
+    per_update_steps_for_actor=10, 
+    per_update_steps_for_critic_on_policy=50, 
+    per_update_steps_for_critic_off_policy=500, 
     cg_iters=10, max_ep_len=1000, 
-    logger_kwargs=dict(), save_freq=1, algo='shpo'):
+    logger_kwargs=dict(), save_freq=1, algo='shpo',
+    eta=10, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
     """
     Sinkhorn Policy Optimization (SHPO)
 
@@ -137,6 +143,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
     q_optimizer = Adam(q_params, lr=lr)
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
+    # pi_optimizer = SGD(ac.pi.parameters(), lr=lr)
 
     # Experience buffer
     replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -144,7 +151,15 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
+
+
     # ===== End Of Init =========================================================================    
+
+    # ===== Begin Optimal Transport =============================================================
+    sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=p, blur=blur_constraint, backend=backend, scaling=scaling,
+                                      debias=True)
+    weight = torch.ones(steps_per_epoch, expand_batch, requires_grad=False, dtype=torch.float32) / steps_per_epoch
+    # ===== End Of Optimal Transport ============================================================
 
     # ===== Critic Loss =========================================================================
     def compute_loss_q(data):
@@ -208,30 +223,42 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     # ===== End Of Critic Loss ============================================================================
 
     # ===== Update Actor ==================================================================================
-    def compute_loss_pi(data):
-        o = data['obs']
-        o = torch.FloatTensor(o).to(device)
+    def compute_loss_pi(o, a):
+        # o = data['obs']
+        # o = torch.FloatTensor(o).to(device)
 
-        o2 = o.repeat(expand_batch, 1)
-        a2 = ac.pi(o2)
-        q1_pi = ac.q1(o2, a2)
-        q2_pi = ac.q2(o2, a2)
+        # o2 = o.repeat(expand_batch, 1)
+        # a2 = ac.pi(o2)
+        # q1_pi = ac.q1(o2, a2)
+        # q2_pi = ac.q2(o2, a2)
+        # q_pi = torch.min(q1_pi, q2_pi)
+
+        a2 = ac.pi(o)
+        q1_pi = ac.q1(o, a2)
+        q2_pi = ac.q2(o, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean()
-        return loss_pi
+        # penalty
+        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
+        a3 = a.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
+        n = a2.shape[1]
+        pi_penaly = sinkhorn_divergence_con(weight, a2/act_limit, weight, a3/act_limit)
 
-    def update_actor(data):
+        loss_pi = -q_pi.mean() + eta * pi_penalty
+
+        pi_info = dict(pi_penalty=pi_penaly.detach().cpu().numpy())
+        return loss_pi, pi_info
+
+    def update_actor(o, a):
         for p in q_params:
             p.requires_grad = False
 
         pi_optimizer.zero_grad()
-        loss_pi = compute_loss_pi(data)
+        loss_pi, pi_info = compute_loss_pi(o, a)
         loss_pi.backward()
         pi_optimizer.step()
 
-        logger.store(LossPi=loss_pi.item())
+        logger.store(LossPi=loss_pi.item(), **pi_info)
 
         """
         # ??? I am not sure: Do I need zero_grad()?
@@ -320,13 +347,20 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
         # Update handling
         if t >= update_after and (t+1) % steps_per_epoch == 0:
-            for j in range(per_update_steps_for_critic):
+            for j in range(per_update_steps_for_critic_off_policy):
                 data = replay_buffer.sample_batch(batch_size)
                 update_critic(data);
 
+            data = replay_buffer.sample_recently(steps_per_epoch)
+            o = data['obs']
+            o = torch.FloatTensor(o).to(device)
+            o = o.repeat(expand_batch, 1)
+            a = ac.pi(o)
+
+            for j in range(per_update_steps_for_critic_on_policy):
+                update_critic(data);
             for j in range(per_update_steps_for_actor):
-                data = replay_buffer.sample_recently(steps_per_epoch)
-                update_actor(data);
+                update_actor(o, a);
 
         # End of epoch handling
             epoch = (t+1) // steps_per_epoch

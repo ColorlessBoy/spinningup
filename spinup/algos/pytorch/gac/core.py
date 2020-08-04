@@ -119,6 +119,6 @@ def squared_distances(x, y):
         print("x.shape : ", x.shape)
         raise ValueError("Incorrect number of dimensions")
 
-    return D_xx - 2*D_xy + D_yprint(max_z)
+    return D_xx - 2*D_xy + D_yy(max_z)
     print(min_z)
     print(avg_z/1000.0)
