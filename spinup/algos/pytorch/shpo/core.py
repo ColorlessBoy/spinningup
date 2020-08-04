@@ -14,7 +14,6 @@ def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
 def cg(self, A, b, iters=10, accuracy=1e-10):
-    start_time = time()
     # A is a function: x ==> A(s) = A @ x
     x = torch.zeros_like(b)
     d = b.clone()
@@ -30,7 +29,6 @@ def cg(self, A, b, iters=10, accuracy=1e-10):
             break
         g_dot_g_old = g_dot_g
         g += alpha * Ad
-    print("The cg() uses {}s.".format(time() - start_time))
     return x
 
 def get_flat_params_from(model):
@@ -98,7 +96,7 @@ class MLPQFunction(nn.Module):
 
 class MLPActorCritic(nn.Module):
 
-    def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
+    def __init__(self, observation_space, action_space, hidden_sizes=[256,256],
                  activation=nn.LeakyReLU(negative_slope=0.2)):
         super().__init__()
 
@@ -133,9 +131,9 @@ class ReplayBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, size=1000000, obs_limit=5.0):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
+        self.obs2_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
+        self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
