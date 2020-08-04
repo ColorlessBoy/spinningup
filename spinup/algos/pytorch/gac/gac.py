@@ -63,7 +63,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         start_beta_pi=5.0, beta_pi_velocity=0.0, max_beta_pi=5.0,
         start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
         start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
-        warm_steps=0, reward_scale=1.0, kernel='gaussian', noise='gaussian'):
+        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -251,7 +251,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        a2 = a2.view(expand_batch, -1, a2.shape[-1])
+        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
