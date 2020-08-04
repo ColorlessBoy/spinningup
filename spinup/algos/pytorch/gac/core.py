@@ -59,7 +59,7 @@ class MLPQFunction(nn.Module):
 
 class MLPActorCritic(nn.Module):
 
-    def __init__(self, observation_space, action_space, hidden_sizes=[256,256],
+    def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
                  activation=nn.LeakyReLU(negative_slope=0.2)):
         super().__init__()
 
@@ -119,6 +119,47 @@ def squared_distances(x, y):
         print("x.shape : ", x.shape)
         raise ValueError("Incorrect number of dimensions")
 
-    return D_xx - 2*D_xy + D_yy(max_z)
+    return D_xx - 2*D_xy + D_yy
+
+def gaussian_kernel(x, y, blur=1.0):
+    C2 = squared_distances(x / blur, y / blur)
+    return (- .5 * C2 ).exp()
+
+def energy_kernel(x, y, blur=None):
+    return -squared_distances(x, y)
+
+kernel_routines = {
+    "gaussian" : gaussian_kernel,
+    "energy"   : energy_kernel,
+}
+
+def mmd(x, y, kernel='gaussian'):
+    b = x.shape[0]
+    m = x.shape[1]
+    n = y.shape[1]
+
+    if kernel in kernel_routines:
+        kernel = kernel_routines[kernel]
+
+    K_xx = kernel(x, x).mean()
+    K_xy = kernel(x, y).mean()
+    K_yy = kernel(y, y).mean()
+
+    return sqrt_0(K_xx + K_yy - 2*K_xy)
+
+if __name__ == '__main__':
+    max_z = 0
+    avg_z = 0
+    min_z = 100
+    batch = 1000
+    for _ in range(1000):
+        # x = torch.randn(batch, 2)
+        x = torch.rand(batch, 2) * 2 - 1
+        y = torch.rand(batch, 2) * 2 - 1
+        z = mmd(x, y, kernel='gaussian')
+        avg_z += z
+        max_z = max(max_z, z)
+        min_z = min(min_z, z)
+    print(max_z)
     print(min_z)
     print(avg_z/1000.0)
