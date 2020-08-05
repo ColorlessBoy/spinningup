@@ -21,7 +21,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     per_update_steps_for_critic_off_policy=500, 
     cg_iters=10, max_ep_len=1000, 
     logger_kwargs=dict(), save_freq=1, algo='shpo',
-    eta=10, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
+    eta=10, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized", penalty_batch=100):
     """
     Sinkhorn Policy Optimization (SHPO)
 
@@ -136,8 +136,8 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
-    for p in ac_targ.parameters():
-        p.requires_grad = False
+    for param in ac_targ.parameters():
+        param.requires_grad = False
 
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
@@ -158,7 +158,6 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     # ===== Begin Optimal Transport =============================================================
     sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=p, blur=blur_constraint, backend=backend, scaling=scaling,
                                       debias=True)
-    weight = torch.ones(steps_per_epoch, expand_batch, requires_grad=False, dtype=torch.float32) / steps_per_epoch
     # ===== End Of Optimal Transport ============================================================
 
     # ===== Critic Loss =========================================================================
@@ -224,29 +223,27 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
     # ===== Update Actor ==================================================================================
     def compute_loss_pi(o, a):
-        # o = data['obs']
-        # o = torch.FloatTensor(o).to(device)
-
-        # o2 = o.repeat(expand_batch, 1)
-        # a2 = ac.pi(o2)
-        # q1_pi = ac.q1(o2, a2)
-        # q2_pi = ac.q2(o2, a2)
-        # q_pi = torch.min(q1_pi, q2_pi)
-
         a2 = ac.pi(o)
         q1_pi = ac.q1(o, a2)
         q2_pi = ac.q2(o, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        # penalty
-        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
-        a3 = a.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
-        n = a2.shape[1]
-        pi_penaly = sinkhorn_divergence_con(weight, a2/act_limit, weight, a3/act_limit)
+        a3 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+
+        # 为了降低计算复杂度，随机选取一些状态求penalty
+        print("Calculating pi_penalty.")
+        idxs = np.random.randint(0, a3.shape[0], size=penalty_batch)
+        weight = torch.ones(expand_batch, requires_grad=False, 
+                dtype=torch.float32, device=device) / expand_batch
+        pi_penalty = 0.0
+        for idx in idxs:
+            # batch 的方式有bug
+            pi_penalty += sinkhorn_divergence_con(weight, a3[idx]/act_limit, weight, a[idx]/act_limit)
+        print("Finished.")
 
         loss_pi = -q_pi.mean() + eta * pi_penalty
 
-        pi_info = dict(pi_penalty=pi_penaly.detach().cpu().numpy())
+        pi_info = dict(pi_penalty=pi_penalty.detach().cpu().numpy())
         return loss_pi, pi_info
 
     def update_actor(o, a):
@@ -257,8 +254,6 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         loss_pi, pi_info = compute_loss_pi(o, a)
         loss_pi.backward()
         pi_optimizer.step()
-
-        logger.store(LossPi=loss_pi.item(), **pi_info)
 
         """
         # ??? I am not sure: Do I need zero_grad()?
@@ -282,7 +277,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             p.requires_grad = True
 
         # Record things
-        logger.store(LossPi=loss_pi.item())
+        logger.store(LossPi=loss_pi.item(), **pi_info) 
     # ===== End Of Actor ==================================================================================
 
     # ===== Start Training ================================================================================
@@ -309,7 +304,6 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
-        
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
@@ -355,7 +349,8 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             o = data['obs']
             o = torch.FloatTensor(o).to(device)
             o = o.repeat(expand_batch, 1)
-            a = ac.pi(o)
+            a = ac.pi(o).detach()
+            a = a.view(expand_batch, -1, a.shape[-1]).transpose(0, 1)
 
             for j in range(per_update_steps_for_critic_on_policy):
                 update_critic(data);
@@ -383,6 +378,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
+            logger.log_tabular('pi_penalty', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
