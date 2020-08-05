@@ -13,11 +13,11 @@ from geomloss import SamplesLoss
 def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
     seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=1000000, 
     gamma=0.99, polyak=0.005, polyak_pi = 0.0, lr=1e-3, 
-    batch_size=400, expand_batch=20,
+    batch_size=400, expand_batch=50,
     start_steps=10000, update_after=10000, num_test_episodes=10, 
     per_update_steps_for_actor=100, 
-    per_update_steps_for_critic_on_policy=50, 
-    per_update_steps_for_critic_off_policy=500, 
+    per_update_steps_for_critic_on_policy=100, 
+    per_update_steps_for_critic_off_policy=1000, 
     cg_iters=10, max_ep_len=1000, 
     logger_kwargs=dict(), save_freq=1, algo='shpo',
     eta=100, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized", penalty_batch=100):
@@ -140,8 +140,6 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-    # q_optimizer = Adam(q_params, lr=lr)
-    # pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
 
@@ -206,17 +204,11 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
+            for param, p_targ in zip(ac.parameters(), ac_targ.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(polyak)
-                p_targ.data.add_((1 - polyak) * p.data)
-
-            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak_pi)
-                p_targ.data.add_(polyak_pi * p.data)
+                p_targ.data.add_((1 - polyak) * param.data)
     # ===== End Of Critic Loss ============================================================================
 
     # ===== Update Actor ==================================================================================
@@ -230,23 +222,26 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        a3 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
-        a4 = ac_targ.pi(o2).view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
-
         pi_penalty = 0.0 
 
-        # 为了降低计算复杂度，随机选取一些状态求penalty
-        idxs = np.random.randint(0, a3.shape[0], size=penalty_batch)
-        weight = torch.ones(expand_batch, requires_grad=False, 
-                dtype=torch.float32, device=device) / expand_batch
-        for idx in idxs:
-            # batch 的方式有bug
-            pi_penalty += sinkhorn_divergence_con(weight, a3[idx]/act_limit, weight, a4[idx]/act_limit)
+        if eta > 0.0:
+            a3 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+            a4 = ac_targ.pi(o2).view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+
+            # 为了降低计算复杂度，随机选取一些状态求penalty
+            idxs = np.random.randint(0, a3.shape[0], size=penalty_batch)
+            weight = torch.ones(expand_batch, requires_grad=False, 
+                    dtype=torch.float32, device=device) / expand_batch
+            for idx in idxs:
+                # batch 的方式有bug, 只能一个一个计算
+                pi_penalty += sinkhorn_divergence_con(weight, a3[idx]/act_limit, weight, a4[idx]/act_limit)
 
         loss_pi = -q_pi.mean() + eta * pi_penalty
 
-        pi_info = dict(pi_penalty=pi_penalty.detach().cpu().numpy())
-        # pi_info = dict(pi_penalty=pi_penalty)
+        if eta > 0.0:
+            pi_penalty = pi_penalty.detach().cpu().numpy()
+
+        pi_info = dict(pi_penalty=pi_penalty)
         return loss_pi, pi_info
 
     def update_actor(data):
@@ -279,14 +274,14 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         """
 
         with torch.no_grad():
-            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
+            for param, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(polyak_pi)
-                p_targ.data.add_(polyak_pi * p.data)
+                p_targ.data.add_((1 - polyak_pi) * param.data)
 
-        for p in q_params:
-            p.requires_grad = True
+        for param in q_params:
+            param.requires_grad = True
 
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
@@ -362,10 +357,11 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
             for j in range(per_update_steps_for_critic_on_policy):
                 update_critic(data);
+
             for j in range(per_update_steps_for_actor):
                 update_actor(data);
 
-        # End of epoch handling
+            # End of epoch handling
             epoch = (t+1) // steps_per_epoch
 
             # Save model
