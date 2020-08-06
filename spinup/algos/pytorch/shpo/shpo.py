@@ -11,13 +11,13 @@ from spinup.utils.logx import EpochLogger
 from geomloss import SamplesLoss
 
 def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
-    seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=1000000, 
-    gamma=0.99, polyak=0.005, polyak_pi = 0.0, lr=1e-3, 
-    batch_size=400, expand_batch=50,
+    seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=400000, 
+    gamma=0.99, polyak=0.005, polyak_pi = 0.0, pi_lr=3e-4, q_lr = 1e-3, 
+    batch_size=100, expand_batch=50,
     start_steps=10000, update_after=10000, num_test_episodes=10, 
     per_update_steps_for_actor=100, 
     per_update_steps_for_critic_on_policy=100, 
-    per_update_steps_for_critic_off_policy=1000, 
+    per_update_steps_for_critic_off_policy=100, 
     cg_iters=10, max_ep_len=1000, 
     logger_kwargs=dict(), save_freq=1, algo='shpo',
     eta=100, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized", penalty_batch=100):
@@ -140,8 +140,8 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-    q_optimizer = Adam(q_params, lr=lr)
-    pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
+    q_optimizer = Adam(q_params, lr=q_lr)
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
 
     # Experience buffer
     replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
