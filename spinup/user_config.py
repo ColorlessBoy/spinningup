@@ -11,6 +11,7 @@ DEFAULT_BACKEND = {
     'td3': 'pytorch',
     'sac': 'pytorch',
     'gac': 'pytorch',
+    'gsac': 'pytorch',
     'shpo': 'pytorch'
 }
 

@@ -5,7 +5,7 @@ import torch
 from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.gac.core as core
+import spinup.algos.pytorch.gsac.core as core
 from spinup.utils.logx import EpochLogger
 
 
@@ -54,7 +54,7 @@ class ReplayBuffer:
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
 
-def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
@@ -261,7 +261,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
 
         if beta_pi <= 0.0:
-            mmd_entropy.detach_()
+            mmd_emtropy.detach_()
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy

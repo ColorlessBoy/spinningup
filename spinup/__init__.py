@@ -19,6 +19,7 @@ from spinup.algos.pytorch.td3.td3 import td3 as td3_pytorch
 from spinup.algos.pytorch.vpg.vpg import vpg as vpg_pytorch
 
 from spinup.algos.pytorch.gac.gac import gac as gac_pytorch
+from spinup.algos.pytorch.gsac.gsac import gsac as gsac_pytorch
 from spinup.algos.pytorch.shpo.shpo import shpo as shpo_pytorch
 
 # Loggers
