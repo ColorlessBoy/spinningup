@@ -2,44 +2,70 @@ from copy import deepcopy
 import itertools
 import numpy as np
 import torch
-from torch.optim import Adam, SGD
+from torch.optim import Adam
 import gym
 import time
-import spinup.algos.pytorch.shpo.core as core
+import spinup.algos.pytorch.gsac.core as core
 from spinup.utils.logx import EpochLogger
 
-<<<<<<< HEAD
-import torch.backends.cudnn as cudnn
-from geomloss import SamplesLoss
 
-def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
-    seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=1000000, 
-    gamma=0.99, polyak=0.005, polyak_pi = 0.0, lr=1e-3, 
-    batch_size=400, expand_batch=100,
-    start_steps=10000, update_after=10000, num_test_episodes=10, 
-    per_update_steps_for_actor=10, 
-    per_update_steps_for_critic_on_policy=50, 
-    per_update_steps_for_critic_off_policy=500, 
-    cg_iters=10, max_ep_len=1000, 
-    logger_kwargs=dict(), save_freq=1, algo='shpo',
-    eta=10, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
-=======
-from geomloss import SamplesLoss
-
-def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
-    seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=400000, 
-    gamma=0.99, polyak=0.005, polyak_pi = 0.0, pi_lr=3e-4, q_lr = 1e-3, 
-    batch_size=100, expand_batch=50,
-    start_steps=10000, update_after=10000, num_test_episodes=10, 
-    per_update_steps_for_actor=100, 
-    per_update_steps_for_critic_on_policy=100, 
-    per_update_steps_for_critic_off_policy=100, 
-    cg_iters=10, max_ep_len=1000, 
-    logger_kwargs=dict(), save_freq=1, algo='shpo',
-    eta=100, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized", penalty_batch=100):
->>>>>>> gsac
+class ReplayBuffer:
     """
-    Sinkhorn Policy Optimization (SHPO)
+    A simple FIFO experience replay buffer for SAC agents.
+    """
+
+    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
+        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
+        self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
+        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.rew_buf = np.zeros(size, dtype=np.float32)
+        self.done_buf = np.zeros(size, dtype=np.float32)
+        self.ptr, self.size, self.max_size = 0, 0, size
+        # For state normalization.
+        self.total_num = 0
+        self.obs_limit = 5.0
+        self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
+        self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
+        self.obs_std = np.zeros(obs_dim, dtype=np.float32)
+
+    def store(self, obs, act, rew, next_obs, done):
+        self.obs_buf[self.ptr] = obs
+        self.obs2_buf[self.ptr] = next_obs
+        self.act_buf[self.ptr] = act
+        self.rew_buf[self.ptr] = rew
+        self.done_buf[self.ptr] = done
+        self.ptr = (self.ptr+1) % self.max_size
+        self.size = min(self.size+1, self.max_size)
+
+        self.total_num += 1
+        self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
+        self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
+        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+
+    def sample_batch(self, batch_size=32):
+        idxs = np.random.randint(0, self.size, size=batch_size)
+        batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
+                     obs2=self.obs_encoder(self.obs2_buf[idxs]),
+                     act=self.act_buf[idxs],
+                     rew=self.rew_buf[idxs],
+                     done=self.done_buf[idxs])
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
+    
+    def obs_encoder(self, o):
+        return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+
+def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
+        steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
+        polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
+        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
+        logger_kwargs=dict(), save_freq=1, 
+        device='cuda', expand_batch=100, 
+        start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
+        start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
+        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
+        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
+    """
+    Generative Actor-Critic (GAC)
 
     Args:
         env_fn : A function which creates a copy of the environment.
@@ -100,19 +126,21 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             where :math:`\\rho` is polyak. (Always between 0 and 1, usually 
             close to 1.)
 
-        polyak_pi (float): Interpolation factor in polyak averaging for target 
-            networks. Target networks are updated towards main networks 
-            according to:
-
-            .. math:: \\theta_{\\text{targ}} \\leftarrow 
-                \\rho \\theta_{\\text{targ}} + (1-\\rho) \\theta
-
-            where :math:`\\rho` is polyak. (Always between 0 and 1, usually 
-            close to 1.)
-
         lr (float): Learning rate (used for both policy and value learning).
 
-        batch_size (int): Minibatch size for Critic.
+        batch_size (int): Minibatch size for SGD.
+
+        start_steps (int): Number of steps for uniform-random action selection,
+            before running real policy. Helps exploration.
+
+        update_after (int): Number of env interactions to collect before
+            starting to do gradient descent updates. Ensures replay buffer
+            is full enough for useful updates.
+
+        update_every (int): Number of env interactions that should elapse
+            between gradient descent updates. Note: Regardless of how long 
+            you wait between updates, the ratio of env steps to gradient steps 
+            is locked to 1.
 
         num_test_episodes (int): Number of episodes to test the deterministic
             policy at the end of each epoch.
@@ -126,7 +154,6 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
     """
 
-    # ====== All About Init ===============================================================
     device = torch.device(device)
 
     logger = EpochLogger(**logger_kwargs)
@@ -140,7 +167,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape[0]
+    obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
@@ -152,51 +179,45 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
-    for param in ac_targ.parameters():
-        param.requires_grad = False
-
+    for p in ac_targ.parameters():
+        p.requires_grad = False
+        
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-<<<<<<< HEAD
-    q_optimizer = Adam(q_params, lr=lr)
-    pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
-    # pi_optimizer = SGD(ac.pi.parameters(), lr=lr)
-=======
-    q_optimizer = Adam(q_params, lr=q_lr)
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
->>>>>>> gsac
 
     # Experience buffer
-    replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
-
-    # ===== End Of Init =========================================================================    
-
-    # ===== Begin Optimal Transport =============================================================
-    sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=p, blur=blur_constraint, backend=backend, scaling=scaling,
-                                      debias=True)
-<<<<<<< HEAD
-    weight = torch.ones(steps_per_epoch, expand_batch, requires_grad=False, dtype=torch.float32) / steps_per_epoch
-=======
->>>>>>> gsac
-    # ===== End Of Optimal Transport ============================================================
-
-    # ===== Critic Loss =========================================================================
-    def compute_loss_q(data):
+    # Set up function for computing SAC Q-losses
+    def compute_loss_q(data, beta_q, bias_q):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
-        o  = torch.FloatTensor(o).to(device)
-        a  = torch.FloatTensor(a).to(device)
-        r  = torch.FloatTensor(r).to(device)
+        o = torch.FloatTensor(o).to(device)
+        a = torch.FloatTensor(a).to(device).requires_grad_(True)
+        r = torch.FloatTensor(r).to(device)
         o2 = torch.FloatTensor(o2).to(device)
-        d  = torch.FloatTensor(d).to(device)
+        d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o,a)
         q2 = ac.q2(o,a)
+
+        # Q Net Regularization.
+        gradients = torch.autograd.grad(
+            outputs=q1.sum()+q2.sum(),
+            inputs=a,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )[0]
+        gradient_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean()
+        gradient_penalty = (gradient_norm - bias_q) ** 2
+
+        if beta_q <= 0.0:
+            gradient_penalty.detach_()
 
         # Bellman backup for Q functions
 
@@ -213,59 +234,17 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
         loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q = loss_q1 + loss_q2 + beta_q*gradient_penalty
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy(),
+                      Q_penalty=gradient_norm.detach().cpu().numpy())
 
         return loss_q, q_info
-    
-    def update_critic(data):
-        # First run one gradient descent step for Q1 and Q2
-        q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
-        loss_q.backward()
-        q_optimizer.step()
 
-        # Record things
-        logger.store(LossQ=loss_q.item(), **q_info)
-
-        # Finally, update target networks by polyak averaging.
-        with torch.no_grad():
-            for param, p_targ in zip(ac.parameters(), ac_targ.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak)
-                p_targ.data.add_((1 - polyak) * param.data)
-    # ===== End Of Critic Loss ============================================================================
-
-    # ===== Update Actor ==================================================================================
-<<<<<<< HEAD
-    def compute_loss_pi(o, a):
-        # o = data['obs']
-        # o = torch.FloatTensor(o).to(device)
-
-        # o2 = o.repeat(expand_batch, 1)
-        # a2 = ac.pi(o2)
-        # q1_pi = ac.q1(o2, a2)
-        # q2_pi = ac.q2(o2, a2)
-        # q_pi = torch.min(q1_pi, q2_pi)
-
-        a2 = ac.pi(o)
-        q1_pi = ac.q1(o, a2)
-        q2_pi = ac.q2(o, a2)
-        q_pi = torch.min(q1_pi, q2_pi)
-
-        # penalty
-        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
-        a3 = a.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
-        n = a2.shape[1]
-        pi_penaly = sinkhorn_divergence_con(weight, a2/act_limit, weight, a3/act_limit)
-
-        loss_pi = -q_pi.mean() + eta * pi_penalty
-=======
-    def compute_loss_pi(data):
+    # Set up function for computing SAC pi loss
+    def compute_loss_pi(data, beta_pi):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -275,88 +254,75 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        pi_penalty = 0.0 
+        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+        with torch.no_grad():
+            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
-        if eta > 0.0:
-            a3 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
-            a4 = ac_targ.pi(o2).view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+        mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
 
-            # 为了降低计算复杂度，随机选取一些状态求penalty
-            idxs = np.random.randint(0, a3.shape[0], size=penalty_batch)
-            weight = torch.ones(expand_batch, requires_grad=False, 
-                    dtype=torch.float32, device=device) / expand_batch
-            for idx in idxs:
-                # batch 的方式有bug, 只能一个一个计算
-                pi_penalty += sinkhorn_divergence_con(weight, a3[idx]/act_limit, weight, a4[idx]/act_limit)
+        if beta_pi <= 0.0:
+            mmd_emtropy.detach_()
 
-        loss_pi = -q_pi.mean() + eta * pi_penalty
+        # Entropy-regularized policy loss
+        loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
 
-        if eta > 0.0:
-            pi_penalty = pi_penalty.detach().cpu().numpy()
+        # Useful info for logging
+        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
-        pi_info = dict(pi_penalty=pi_penalty)
-        return loss_pi, pi_info
->>>>>>> gsac
-
-        pi_info = dict(pi_penalty=pi_penaly.detach().cpu().numpy())
         return loss_pi, pi_info
 
-    def update_actor(o, a):
+    # Set up optimizers for policy and q-function
+    pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
+    q_optimizer = Adam(q_params, lr=lr)
+
+    # Set up model saving
+    logger.setup_pytorch_saver(ac)
+
+    def update(data, beta_pi, beta_q, bias_q):
+        # First run one gradient descent step for Q1 and Q2
+        q_optimizer.zero_grad()
+        loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
+        loss_q.backward()
+        q_optimizer.step()
+
+        # Record things
+        logger.store(LossQ=loss_q.item(), **q_info)
+
+        # Freeze Q-networks so you don't waste computational effort 
+        # computing gradients for them during the policy learning step.
         for p in q_params:
             p.requires_grad = False
 
+        # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-<<<<<<< HEAD
-        loss_pi, pi_info = compute_loss_pi(o, a)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
         loss_pi.backward()
         pi_optimizer.step()
 
-        logger.store(LossPi=loss_pi.item(), **pi_info)
-=======
-        loss_pi, pi_info = compute_loss_pi(data)
-        loss_pi.backward()
-        pi_optimizer.step()
-
-        logger.store(LossPi=loss_pi.item())
->>>>>>> gsac
-
-        """
-        # ??? I am not sure: Do I need zero_grad()?
-        loss_pi = compute_loss_pi(data)
-        grads = torch.autograd.grad(loss_pi, ac.pi.parameters())
-        grads_vector = torch.cat([grad.view(-1) for grad in grads]).data
-
-        def get_Hx(x):
-            # Require New Method.
-
-        invHg = core.cg(get_Hx, loss_grad, cg_iters)
-        # fullstep = ???
-
-        with torch.no_grad():
-            prev_params = core.get_flat_params_from(ac.pi)
-            # new_params = ???
-            # core.set_flat_params_to(ac.pi, new_params)
-        """
-
-        with torch.no_grad():
-            for param, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak_pi)
-                p_targ.data.add_((1 - polyak_pi) * param.data)
-
-        for param in q_params:
-            param.requires_grad = True
+        for p in q_params:
+            p.requires_grad = True
 
         # Record things
-        logger.store(LossPi=loss_pi.item())
-    # ===== End Of Actor ==================================================================================
+        logger.store(LossPi=loss_pi.item(), **pi_info)
 
-    # ===== Start Training ================================================================================
+        # Finally, update target networks by polyak averaging.
+        with torch.no_grad():
+            for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(polyak)
+                p_targ.data.add_((1 - polyak) * p.data)
+
+            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_((1 - pi_lr))
+                p_targ.data.add_(pi_lr * p.data)
+
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        a = ac.act(o, deterministic)
+        a = ac_targ.act(o, deterministic, noise=noise)
         return a
 
     def test_agent():
@@ -368,7 +334,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
-    
+
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
     start_time = time.time()
@@ -396,6 +362,9 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
         d = False if ep_len==max_ep_len else d
 
+        # Reward Modified.
+        if not d: r *= reward_scale
+
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
@@ -413,33 +382,20 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             o, ep_ret, ep_len = env.reset(), 0, 0
 
         # Update handling
-        if t >= update_after and (t+1) % steps_per_epoch == 0:
-            for j in range(per_update_steps_for_critic_off_policy):
-                data = replay_buffer.sample_batch(batch_size)
-                update_critic(data);
+        if t >= update_after and t % update_every == 0:
+            epoch = (t+1) // steps_per_epoch
+            beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
+            beta_q = min(start_beta_q+beta_q_velocity*epoch, max_beta_q)
+            bias_q = min(start_bias_q+bias_q_velocity*epoch, max_bias_q)
+            for j in range(update_every):
+                batch = replay_buffer.sample_batch(batch_size)
+                if t >= warm_steps:
+                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
+                else:
+                    update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
 
-            data = replay_buffer.sample_recently(steps_per_epoch)
-<<<<<<< HEAD
-            o = data['obs']
-            o = torch.FloatTensor(o).to(device)
-            o = o.repeat(expand_batch, 1)
-            a = ac.pi(o)
-=======
->>>>>>> gsac
-
-            for j in range(per_update_steps_for_critic_on_policy):
-                update_critic(data);
-            for j in range(per_update_steps_for_actor):
-                update_actor(o, a);
-
-<<<<<<< HEAD
         # End of epoch handling
-=======
-            for j in range(per_update_steps_for_actor):
-                update_actor(data);
-
-            # End of epoch handling
->>>>>>> gsac
+        if (t+1) % steps_per_epoch == 0:
             epoch = (t+1) // steps_per_epoch
 
             # Save model
@@ -460,15 +416,36 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-<<<<<<< HEAD
-=======
-            logger.log_tabular('pi_penalty', average_only=True)
->>>>>>> gsac
+            logger.log_tabular('pi_penalty', with_min_and_max=True)
+            logger.log_tabular('Q_penalty', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
             # Normalize State
             print("obs_mean="+str(replay_buffer.obs_mean))
             print("obs_std=" +str(replay_buffer.obs_std))
-    # ====== End Training ==================================================================================
-        
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
+    parser.add_argument('--hid', type=int, default=256)
+    parser.add_argument('--l', type=int, default=2)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--seed', '-s', type=int, default=0)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--exp_name', type=str, default='gac')
+    parser.add_argument('--device', type=str, default='cuda')
+    args = parser.parse_args()
+
+    from spinup.utils.run_utils import setup_logger_kwargs
+    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+
+    torch.set_num_threads(torch.get_num_threads())
+
+    gac(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
+        gamma=args.gamma, seed=args.seed, epochs=args.epochs,
+        logger_kwargs=logger_kwargs)
+
+#   python -m spinup.run gac_pytorch --env HalfCheetah-v2 --exp_name sac_HalfCheetahv2

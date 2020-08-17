@@ -40,7 +40,7 @@ class ReplayBuffer:
         self.total_num += 1
         self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
         self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
-        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2)
+        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
@@ -60,7 +60,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        start_beta_pi=5.0, beta_pi_velocity=0.0, max_beta_pi=5.0,
+        start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
         start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
         start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
         warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
@@ -216,6 +216,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         gradient_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean()
         gradient_penalty = (gradient_norm - bias_q) ** 2
 
+        if beta_q <= 0.0:
+            gradient_penalty.detach_()
+
         # Bellman backup for Q functions
 
         with torch.no_grad():
@@ -251,11 +254,18 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
+<<<<<<< HEAD
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
+=======
+        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+>>>>>>> gsac
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
         mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
+
+        if beta_pi <= 0.0:
+            mmd_entropy.detach_()
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + beta_pi*mmd_entropy

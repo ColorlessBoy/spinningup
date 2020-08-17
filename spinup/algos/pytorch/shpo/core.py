@@ -173,7 +173,7 @@ class ReplayBuffer:
         if self.ptr >= batch_size:
             idxs = np.arange(self.ptr - batch_size, self.ptr)
         else:
-            idxs = np.hstack(np.arange(self.ptr), np.arange(max_size-batch_size+self.ptr, max_size))
+            idxs = np.hstack((np.arange(self.ptr), np.arange(self.max_size-batch_size+self.ptr, self.max_size)))
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
