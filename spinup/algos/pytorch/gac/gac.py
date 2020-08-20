@@ -254,11 +254,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-<<<<<<< HEAD
-        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose_(0, 1)
-=======
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
->>>>>>> gsac
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
