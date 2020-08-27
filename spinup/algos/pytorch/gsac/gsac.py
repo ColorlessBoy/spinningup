@@ -8,6 +8,7 @@ import time
 import spinup.algos.pytorch.gsac.core as core
 from spinup.utils.logx import EpochLogger
 
+from geomloss import SamplesLoss
 
 class ReplayBuffer:
     """
@@ -63,7 +64,8 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
         start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
         start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
-        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
+        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian',
+        beta_sh = 1.0, eta=100, sh_p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
     """
     Generative Actor-Critic (GAC)
 
@@ -192,6 +194,9 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
+    sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=sh_p, blur=blur_constraint, backend=backend, scaling=scaling,
+                                      debias=True)
+
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data, beta_q, bias_q):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
@@ -254,20 +259,28 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
+        a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1).contiguous()
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
         mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
-
         if beta_pi <= 0.0:
-            mmd_emtropy.detach_()
+            mmd_entropy.detach_()
+
+        a4 = ac_targ.pi(o2).view(expand_batch, -1, a2.shape[-1]).transpose(0, 1).contiguous()
+        # weight = torch.ones(a4.shape[0], expand_batch, requires_grad=False, 
+        #        dtype=torch.float32, device=device) / expand_batch
+        # sh_penalty = sinkhorn_divergence_con(weight, a2/act_limit, weight, a4/act_limit)
+        sh_penalty = core.mmd(a2/act_limit, a4/act_limit, kernel=kernel)
+        if beta_sh <= 0.0:
+            sh_penalty.detach_()
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
+        loss_pi = -q_pi.mean() + beta_pi * mmd_entropy + beta_sh * sh_penalty
 
         # Useful info for logging
-        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy(), 
+                       sh_penalty=sh_penalty.detach().cpu().numpy())
 
         return loss_pi, pi_info
 
@@ -313,11 +326,12 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.mul_(polyak)
                 p_targ.data.add_((1 - polyak) * p.data)
 
-            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_((1 - pi_lr))
-                p_targ.data.add_(pi_lr * p.data)
+    def update_target_pi():
+        for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
+            # NB: We use an in-place operations "mul_", "add_" to update target
+            # params, as opposed to "mul" and "add", which would make new tensors.
+            p_targ.data.mul_((1 - pi_lr))
+            p_targ.data.add_(pi_lr * p.data)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -393,6 +407,7 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
                 else:
                     update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
+            update_target_pi()
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -417,6 +432,7 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('pi_penalty', with_min_and_max=True)
+            logger.log_tabular('sh_penalty', with_min_and_max=True)
             logger.log_tabular('Q_penalty', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
@@ -443,7 +459,7 @@ if __name__ == '__main__':
 
     torch.set_num_threads(torch.get_num_threads())
 
-    gac(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+    gsac(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), 
         gamma=args.gamma, seed=args.seed, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
