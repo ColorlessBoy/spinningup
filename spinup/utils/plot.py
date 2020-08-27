@@ -162,7 +162,10 @@ def make_plots(all_logdirs, legend=None, xaxis=None, values=None, count=False,
         plt.figure()
         plot_data(data, xaxis=xaxis, value=value, condition=condition, smooth=smooth, estimator=estimator)
 #   plt.show()
-    plt.savefig('./{}.pdf'.format(name))
+    if '.' in name :
+        plt.savefig('./{}'.format(name))
+    else:
+        plt.savefig('./{}.pdf'.format(name))
 
 def main():
     import argparse
