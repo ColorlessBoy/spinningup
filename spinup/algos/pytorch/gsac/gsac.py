@@ -57,16 +57,16 @@ class ReplayBuffer:
 
 def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak_q=0.995, polyak_pi=0.0, pi_lr=1.0, lr=1e-3, 
+        polyak_q=0.995, polyak_pi=0.0, lr=1e-3, 
         batch_size=100, start_steps=10000, 
-        update_after=1000, update_every=50, update_steps=30,
+        update_after=1000, update_every=2, update_steps=2,
         num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
-        start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =0.0,
-        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =0.0, 
-        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian',
+        start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
+        start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
+        start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
+        reward_scale=1.0, kernel='energy', noise='gaussian',
         beta_sh = 1.0, eta=100, sh_p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
     """
     Generative Actor-Critic (GAC)
@@ -252,7 +252,7 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_q, q_info
 
     # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi):
+    def compute_loss_pi(data, beta_pi, beta_sh):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -316,17 +316,17 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update_actor(data, beta_pi, beta_sh):
         # Freeze Q-networks so you don't waste computational effort 
         # computing gradients for them during the policy learning step.
-        for p in q_params:
-            p.requires_grad = False
+        for q in q_params:
+            q.requires_grad = False
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi, beta_sh=beta_sh)
         loss_pi.backward()
         pi_optimizer.step()
 
-        for p in q_params:
-            p.requires_grad = True
+        for q in q_params:
+            q.requires_grad = True
 
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
