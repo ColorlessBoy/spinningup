@@ -58,13 +58,12 @@ class ReplayBuffer:
 def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
-        update_after=1000, update_every=50, update_steps=30,
-        num_test_episodes=10, max_ep_len=1000, 
+        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
-        start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =0.0,
-        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =0.0, 
+        start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
+        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
         warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian',
         beta_sh = 1.0, eta=100, sh_p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized"):
     """
@@ -187,7 +186,6 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-    q_targ_params = itertools.chain(ac_targ.q1.parameters(), ac_targ.q2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -293,7 +291,7 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update_critic(data, beta_q, bias_q):
+    def update(data, beta_pi, beta_q, bias_q):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
@@ -302,17 +300,7 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Record things
         logger.store(LossQ=loss_q.item(), **q_info)
-    
-    def update_targ_q(polyak):
-        # Finally, update target networks by polyak averaging.
-        with torch.no_grad():
-            for q, q_targ in zip(q_params, q_targ_params):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                q_targ.data.mul_(polyak)
-                q_targ.data.add_((1 - polyak) * q.data)
 
-    def update_actor(data, beta_pi, beta_sh):
         # Freeze Q-networks so you don't waste computational effort 
         # computing gradients for them during the policy learning step.
         for p in q_params:
@@ -330,7 +318,15 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
 
-    def update_target_pi(pi_lr):
+        # Finally, update target networks by polyak averaging.
+        with torch.no_grad():
+            for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(polyak)
+                p_targ.data.add_((1 - polyak) * p.data)
+
+    def update_target_pi():
         for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
             # NB: We use an in-place operations "mul_", "add_" to update target
             # params, as opposed to "mul" and "add", which would make new tensors.
@@ -405,19 +401,13 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
             beta_q = min(start_beta_q+beta_q_velocity*epoch, max_beta_q)
             bias_q = min(start_bias_q+bias_q_velocity*epoch, max_bias_q)
-            
-            # Firstly, update critic.
-            for j in range(update_steps):
+            for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                update_critic(data=batch, beta_q=beta_q, bias_q=bias_q)
-                update_targ_q(polyak);
-            
-            # Secondly, update actor.
-            # update_actor() uses ac.q1 and ac.q2.
-            for j in range(update_steps):
-                batch = replay_buffer.sample_batch(batch_size)
-                update_actor(data=batch, beta_pi=beta_pi, beta_sh=beta_sh);
-            update_target_pi(pi_lr)
+                if t >= warm_steps:
+                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
+                else:
+                    update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
+            update_target_pi()
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
