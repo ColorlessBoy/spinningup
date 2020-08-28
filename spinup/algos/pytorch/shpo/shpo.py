@@ -12,15 +12,16 @@ from geomloss import SamplesLoss
 
 def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), 
     seed=0, device='cpu', steps_per_epoch=4000, epochs=50, replay_size=400000, 
-    gamma=0.99, polyak=0.005, polyak_pi = 0.0, pi_lr=3e-4, q_lr = 1e-3, 
-    batch_size=100, expand_batch=50,
+    gamma=0.99, polyak_q=0.995, polyak_pi = 0.0, pi_lr=3e-4, q_lr = 1e-3, 
+    batch_size=100, expand_batch=100,
     start_steps=10000, update_after=10000, num_test_episodes=10, 
     per_update_steps_for_actor=100, 
     per_update_steps_for_critic_on_policy=100, 
     per_update_steps_for_critic_off_policy=100, 
     cg_iters=10, max_ep_len=1000, 
     logger_kwargs=dict(), save_freq=1, algo='shpo',
-    eta=100, p=2, blur_loss=10, blur_constraint=1, scaling=0.95, backend="tensorized", penalty_batch=100):
+    beta_sh=100, sh_p=2, blur_loss=10, blur_constraint=1, 
+    scaling=0.95, backend="tensorized", penalty_batch=100):
     """
     Sinkhorn Policy Optimization (SHPO)
 
@@ -152,7 +153,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
     # ===== End Of Init =========================================================================    
 
     # ===== Begin Optimal Transport =============================================================
-    sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=p, blur=blur_constraint, backend=backend, scaling=scaling,
+    sinkhorn_divergence_con = SamplesLoss(loss="sinkhorn", p=sh_p, blur=blur_constraint, backend=backend, scaling=scaling,
                                       debias=True)
     # ===== End Of Optimal Transport ============================================================
 
@@ -202,13 +203,19 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         # Record things
         logger.store(LossQ=loss_q.item(), **q_info)
 
-        # Finally, update target networks by polyak averaging.
+    def update_target_q(polyak_q):
         with torch.no_grad():
-            for param, p_targ in zip(ac.parameters(), ac_targ.parameters()):
+            for p, p_targ in zip(ac.q1.parameters(), ac_targ.q1.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak)
-                p_targ.data.add_((1 - polyak) * param.data)
+                p_targ.data.mul_(polyak_q)
+                p_targ.data.add_((1 - polyak_q) * p.data)
+            for p, p_targ in zip(ac.q2.parameters(), ac_targ.q2.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(polyak_q)
+                p_targ.data.add_((1 - polyak_q) * p.data)
+
     # ===== End Of Critic Loss ============================================================================
 
     # ===== Update Actor ==================================================================================
@@ -224,7 +231,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
 
         pi_penalty = 0.0 
 
-        if eta > 0.0:
+        if beta_sh > 0.0:
             a3 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
             a4 = ac_targ.pi(o2).view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
 
@@ -236,9 +243,9 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
                 # batch 的方式有bug, 只能一个一个计算
                 pi_penalty += sinkhorn_divergence_con(weight, a3[idx]/act_limit, weight, a4[idx]/act_limit)
 
-        loss_pi = -q_pi.mean() + eta * pi_penalty
+        loss_pi = -q_pi.mean() + beta_sh * pi_penalty
 
-        if eta > 0.0:
+        if beta_sh > 0.0:
             pi_penalty = pi_penalty.detach().cpu().numpy()
 
         pi_info = dict(pi_penalty=pi_penalty)
@@ -272,19 +279,19 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             # new_params = ???
             # core.set_flat_params_to(ac.pi, new_params)
         """
-
-        with torch.no_grad():
-            for param, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak_pi)
-                p_targ.data.add_((1 - polyak_pi) * param.data)
-
         for param in q_params:
             param.requires_grad = True
 
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
+    
+    def update_target_pi(polyak_pi):
+        with torch.no_grad():
+            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(polyak_pi)
+                p_targ.data.add_((1 - polyak_pi) * p.data)
     # ===== End Of Actor ==================================================================================
 
     # ===== Start Training ================================================================================
@@ -350,16 +357,21 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
         # Update handling
         if t >= update_after and (t+1) % steps_per_epoch == 0:
             for j in range(per_update_steps_for_critic_off_policy):
+                # Double Q
                 data = replay_buffer.sample_batch(batch_size)
                 update_critic(data);
+                update_target_q(polyak_q);
 
             data = replay_buffer.sample_recently(steps_per_epoch)
 
             for j in range(per_update_steps_for_critic_on_policy):
+                # TD algorithm
                 update_critic(data);
+                update_target_q(0.0);
 
             for j in range(per_update_steps_for_actor):
                 update_actor(data);
+            update_target_pi(polyak_pi);
 
             # End of epoch handling
             epoch = (t+1) // steps_per_epoch
@@ -382,7 +394,7 @@ def shpo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('pi_penalty', average_only=True)
+            logger.log_tabular('pi_penalty', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
