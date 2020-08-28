@@ -57,7 +57,8 @@ class ReplayBuffer:
 
 def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
+        polyak_q=0.995, polyak_pi=0.0, pi_lr=1.0, lr=1e-3, 
+        batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, update_steps=30,
         num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
@@ -303,14 +304,14 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossQ=loss_q.item(), **q_info)
     
-    def update_targ_q(polyak):
+    def update_targ_q(polyak_q):
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
             for q, q_targ in zip(q_params, q_targ_params):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
-                q_targ.data.mul_(polyak)
-                q_targ.data.add_((1 - polyak) * q.data)
+                q_targ.data.mul_(polyak_q)
+                q_targ.data.add_((1 - polyak_q) * q.data)
 
     def update_actor(data, beta_pi, beta_sh):
         # Freeze Q-networks so you don't waste computational effort 
@@ -330,12 +331,12 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
 
-    def update_target_pi(pi_lr):
+    def update_target_pi(polyak_pi):
         for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
             # NB: We use an in-place operations "mul_", "add_" to update target
             # params, as opposed to "mul" and "add", which would make new tensors.
-            p_targ.data.mul_((1 - pi_lr))
-            p_targ.data.add_(pi_lr * p.data)
+            p_targ.data.mul_(polyak_pi)
+            p_targ.data.add_((1 - polyak_pi) * p.data)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -410,14 +411,14 @@ def gsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for j in range(update_steps):
                 batch = replay_buffer.sample_batch(batch_size)
                 update_critic(data=batch, beta_q=beta_q, bias_q=bias_q)
-                update_targ_q(polyak);
+                update_targ_q(polyak_q);
             
             # Secondly, update actor.
             # update_actor() uses ac.q1 and ac.q2.
             for j in range(update_steps):
                 batch = replay_buffer.sample_batch(batch_size)
                 update_actor(data=batch, beta_pi=beta_pi, beta_sh=beta_sh);
-            update_target_pi(pi_lr)
+            update_target_pi(polyak_pi)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
