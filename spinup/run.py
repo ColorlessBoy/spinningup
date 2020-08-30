@@ -29,7 +29,7 @@ SUBSTITUTIONS = {'env': 'env_name',
 MPI_COMPATIBLE_ALGOS = ['vpg', 'trpo', 'ppo']
 
 # Algo names (used in a few places)
-BASE_ALGO_NAMES = ['vpg', 'trpo', 'ppo', 'ddpg', 'td3', 'sac', 'gac', 'gsac', 'shpo']
+BASE_ALGO_NAMES = ['vpg', 'trpo', 'ppo', 'ddpg', 'td3', 'sac', 'gac', 'gsac', 'shpo', 'gac_jko']
 
 
 def add_with_backends(algo_list):
@@ -192,6 +192,10 @@ if __name__ == '__main__':
     ExperimentGrid run routine to execute each possible experiment.
     """
 
+    import os
+
+    # print(os.environ['LD_LIBRARY_PATH'])
+    os.environ['LD_LIBRARY_PATH'] = '/home/zebang/.mujoco/mujoco200/bin'
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'help'
     valid_algos = add_with_backends(BASE_ALGO_NAMES)
     valid_utils = ['plot', 'test_policy', 'test_policy_action', 'test_policy_action_plain']

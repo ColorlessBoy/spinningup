@@ -20,6 +20,7 @@ from spinup.algos.pytorch.vpg.vpg import vpg as vpg_pytorch
 
 from spinup.algos.pytorch.gac.gac import gac as gac_pytorch
 from spinup.algos.pytorch.gsac.gsac import gsac as gsac_pytorch
+from spinup.algos.pytorch.gac_JKO.gac_jko import gac_jko as gac_jko_pytorch
 from spinup.algos.pytorch.shpo.shpo import shpo as shpo_pytorch
 
 # Loggers
