@@ -75,6 +75,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
+        max_mmd_entropy = 1.2,
         start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
         start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
         start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
@@ -208,6 +209,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
+    # auto-hyperparameters
+    beta_pi = torch.tensor(start_beta_pi, requires_grad=True, device=device)
+
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data, beta_q, bias_q):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
@@ -286,15 +290,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
+    
+    def compute_loss_beta_pi(mmd_entropy):
+        loss_beta_pi = beta_pi * (max_mmd_entropy - mmd_entropy)
+        return loss_beta_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
+    beta_pi_optimizer = Adam([beta_pi], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data, beta_pi, beta_q, bias_q):
+    def update(data, beta_q, bias_q):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
@@ -311,7 +320,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=max(0.0, beta_pi.detach()))
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -320,6 +329,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
+
+        # Auto tuning beta_pi
+        beta_pi_optimizer.zero_grad()
+        loss_beta_pi = compute_loss_beta_pi(pi_info["pi_penalty"])
+        loss_beta_pi.backward()
+        beta_pi_optimizer.step()
+
+        logger.store(beta_pi=beta_pi.detach())
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -397,15 +414,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
-            beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
+            # beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
             beta_q = min(start_beta_q+beta_q_velocity*epoch, max_beta_q)
             bias_q = min(start_bias_q+bias_q_velocity*epoch, max_bias_q)
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
+                    update(data=batch, beta_q=beta_q, bias_q=bias_q)
                 else:
-                    update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
+                    update(data=batch, beta_q=0.0, bias_q=0.0)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -431,6 +448,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('pi_penalty', with_min_and_max=True)
             logger.log_tabular('Q_penalty', with_min_and_max=True)
+            logger.log_tabular('beta_pi', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
