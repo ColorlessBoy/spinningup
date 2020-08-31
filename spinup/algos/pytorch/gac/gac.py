@@ -14,19 +14,26 @@ class ReplayBuffer:
     A simple FIFO experience replay buffer for SAC agents.
     """
 
-    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
+    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0, reward_scale=5.0):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
+
         # For state normalization.
         self.total_num = 0
         self.obs_limit = 5.0
         self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
+
+        # For reward normalization.
+        self.rew_scale = reward_scale
+        self.rew_mean = np.zeros(1, dtype=np.float32)
+        self.rew_square_mean = np.zeros(1, dtype=np.float32)
+        self.rew_std = np.zeros(1, dtype=np.float32)
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -42,17 +49,25 @@ class ReplayBuffer:
         self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
         self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
+        self.rew_mean = self.rew_mean / self.total_num * (self.total_num - 1) + np.array(rew) / self.total_num
+        self.rew_square_mean = (self.rew_square_mean / self.total_num * (self.total_num - 1)
+                             + np.array(rew)**2 / self.total_num)
+        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-8)
+
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
-                     rew=self.rew_buf[idxs],
+                     rew=self.rew_encoder(self.rew_buf[idxs]),
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+    
+    def rew_encoder(self, rew):
+        return ((np.array(rew) - self.rew_mean)/(self.rew_std + 1e-8)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
@@ -60,9 +75,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        start_beta_pi=1.0, beta_pi_velocity=0.1, max_beta_pi=1.0,
-        start_beta_q =0.0, beta_q_velocity =0.01, max_beta_q =1.0,
-        start_bias_q =0.0, bias_q_velocity =0.1, max_bias_q =10.0, 
+        start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
+        start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
+        start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
         warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
@@ -186,7 +201,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, 
+                size=replay_size, reward_scale=reward_scale)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -362,9 +378,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         d = False if ep_len==max_ep_len else d
 
-        # Reward Modified.
-        if not d: r *= reward_scale
-
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
@@ -422,8 +435,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.dump_tabular()
 
             # Normalize State
-            print("obs_mean="+str(replay_buffer.obs_mean))
-            print("obs_std=" +str(replay_buffer.obs_std))
+            print("obs_mean=" + str(replay_buffer.obs_mean))
+            print("obs_std=" + str(replay_buffer.obs_std))
+            print("reward_mean=" + str(replay_buffer.rew_mean))
+            print("reward_std=" + str(replay_buffer.rew_std))
 
 if __name__ == '__main__':
     import argparse
