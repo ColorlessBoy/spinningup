@@ -272,9 +272,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
-            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
+            a3 = (2 * torch.rand_like(a2) - 1)
 
-        mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
+        mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         if beta_pi <= 0.0:
             mmd_entropy.detach_()
