@@ -256,9 +256,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
-            a3 = (2 * torch.rand_like(a2) - 1)
+            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
 
-        mmd_entropy = core.mmd(a2, a3, kernel=kernel)
+        mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
 
         if beta_pi <= 0.0:
             mmd_entropy.detach_()
@@ -330,7 +330,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(get_action(o, True)*act_limit)
+                o, r, d, _ = test_env.step(get_action(o, True))
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
@@ -352,7 +352,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a = get_action(o, deterministic=False)
 
         # Step the env
-        o2, r, d, _ = env.step(a * act_limit)
+        o2, r, d, _ = env.step(a)
         ep_ret += r
         ep_len += 1
 
