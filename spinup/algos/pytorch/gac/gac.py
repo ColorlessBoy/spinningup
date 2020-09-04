@@ -67,7 +67,7 @@ class ReplayBuffer:
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
     
     def rew_encoder(self, rew):
-        return ((np.array(rew) - self.rew_mean)/(self.rew_std + 1e-8)*self.rew_scale)
+        return ((np.array(rew) - self.rew_mean)/min(self.rew_std, 0.2)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
