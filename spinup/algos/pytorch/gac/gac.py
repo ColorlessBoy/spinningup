@@ -67,7 +67,7 @@ class ReplayBuffer:
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
     
     def rew_encoder(self, rew):
-        return ((np.array(rew) - self.rew_mean)/(self.rew_std + 1e-8)*self.rew_scale)
+        return ((np.array(rew) - self.rew_mean)/max(self.rew_std, 0.2)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
@@ -75,11 +75,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        max_mmd_entropy = 1.2,
+        max_mmd_entropy = 1.5,
         start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
         start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
         start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
-        warm_steps=0, reward_scale=1.0, kernel='energy', noise='gaussian'):
+        warm_steps=0, reward_scale=1.0, base_reward_scale=1.0,
+        kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -396,7 +397,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(o, a, r*base_reward_scale, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac_targ.obs_std = ac.obs_std
