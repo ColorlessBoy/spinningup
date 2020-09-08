@@ -57,9 +57,9 @@ class ReplayBuffer:
 
 def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, 
+        polyak=0.995, lr=1e-3, alpha='auto_0.2', batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda'):
+        logger_kwargs=dict(), save_freq=1, device='cuda', target_entropy='auto'):
     """
     Soft Actor-Critic (SAC)
 
@@ -194,6 +194,41 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
+    # Target entropy is used when learning the entropy coefficient
+    if target_entropy == 'auto':
+        # automatically set target entropy if needed
+        target_entropy = -np.prod(env.action_space.shape).astype(np.float32)
+    else:
+        # Force conversion
+        # this will also throw an error for unexpected string
+        target_entropy = float(target_entropy)
+    logger.log('\nTarget entropy: \t %f\n'%target_entropy)
+    target_entropy = torch.tensor(target_entropy, dtype=torch.float32, device=device)
+
+    # The entropy coefficient or entropy can be learned automatically
+    # see Automating Entropy Adjustment for Maximum Entropy RL section
+    # of https://arxiv.org/abs/1812.05905
+    auto_alpha = False
+    log_alpha = 1.0
+    if isinstance(alpha, str) and alpha.startswith('auto'):
+        # Default initial value of ent_coef when learned
+        auto_alpha = True
+        init_value = 0.2
+        if '_' in alpha:
+            init_value = float(alpha.split('_')[1])
+            assert init_value > 0., "The initial value of ent_coef must be greater than 0"
+        alpha = torch.tensor(init_value)
+        log_alpha = torch.tensor(np.log(init_value), dtype=torch.float32, 
+                            device=device, requires_grad=True)
+    else:
+        # Force conversion to float
+        # this will throw an error if a malformed string (different from 'auto')
+        # is passed
+        alpha = float(alpha)
+        alpha = torch.tensor(alpha, dtype=torch.float32, 
+            device=device, requires_grad=False)
+        log_alpha = alpha.log()
+
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
@@ -246,10 +281,16 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
 
         return loss_pi, pi_info
+    
+    def compute_loss_logalpha(logp_pi):
+        logp_pi = torch.FloatTensor(logp_pi).to(device)
+        loss_logalpha = -log_alpha * ((logp_pi + target_entropy)**2).mean()
+        return loss_logalpha
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
+    logalpha_optimizer = Adam([log_alpha], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -282,20 +323,26 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
 
+        # Update alpha
+        if auto_alpha:
+            logalpha_optimizer.zero_grad()
+            loss_logalpha = compute_loss_logalpha(pi_info['LogPi'])
+            loss_logalpha.backward()
+            logalpha_optimizer.step()
+
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
+            alpha = torch.exp(log_alpha)
             for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(polyak)
                 p_targ.data.add_((1 - polyak) * p.data)
 
-#   def get_action(o, deterministic=False):
-#       return ac.act(torch.as_tensor(o, dtype=torch.float32), 
-#                     deterministic)
+
     def get_action(o, deterministic=False):
-        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        return ac_targ.act(o, deterministic)
+        return ac.act(torch.as_tensor(o, dtype=torch.float32), 
+                      deterministic)
 
     def test_agent():
         for j in range(num_test_episodes):
