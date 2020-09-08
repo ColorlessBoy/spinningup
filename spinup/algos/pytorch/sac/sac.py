@@ -288,8 +288,8 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         for j in range(num_test_episodes):
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
-                # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(get_action(o, True))
+                # Take stochastic actions at test time 
+                o, r, d, _ = test_env.step(get_action(o, False))
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
