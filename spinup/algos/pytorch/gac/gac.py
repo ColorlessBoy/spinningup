@@ -76,7 +76,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        max_mmd_entropy = 1.5,
+        max_mmd_entropy = 2.0,
         start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
         start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
         start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
@@ -294,7 +294,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_pi, pi_info
     
     def compute_loss_beta_pi(mmd_entropy):
-        loss_beta_pi = beta_pi * (max_mmd_entropy - mmd_entropy)
+        loss_beta_pi = beta_pi * min(0, max_mmd_entropy - mmd_entropy)
         return loss_beta_pi
 
     # Set up optimizers for policy and q-function
