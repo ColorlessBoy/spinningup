@@ -212,7 +212,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # auto-hyperparameters
-    beta_pi = torch.tensor(start_beta_pi, requires_grad=True, device=device)
+    log_beta_pi = torch.tensor(np.log(start_beta_pi), 
+                requires_grad=True, device=device)
+    beta_pi = start_beta_pi
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data, beta_q, bias_q):
@@ -294,13 +296,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_pi, pi_info
     
     def compute_loss_beta_pi(mmd_entropy):
-        loss_beta_pi = beta_pi * min(0, max_mmd_entropy - mmd_entropy)
+        loss_beta_pi = log_beta_pi * (max_mmd_entropy - mmd_entropy)
         return loss_beta_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
-    beta_pi_optimizer = Adam([beta_pi], lr=lr)
+    beta_pi_optimizer = Adam([log_beta_pi], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -337,6 +339,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_beta_pi = compute_loss_beta_pi(pi_info["pi_penalty"])
         loss_beta_pi.backward()
         beta_pi_optimizer.step()
+        beta_pi = log_beta_pi.exp().detach()
 
         logger.store(beta_pi=beta_pi.detach())
 
