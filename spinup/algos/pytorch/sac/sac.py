@@ -282,7 +282,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     
     def compute_loss_logalpha(logp_pi):
         logp_pi = torch.FloatTensor(logp_pi).to(device)
-        loss_logalpha = -log_alpha * ((logp_pi + target_entropy)**2).mean()
+        loss_logalpha = -log_alpha * (logp_pi + target_entropy).mean()
         return loss_logalpha
 
     # Set up optimizers for policy and q-function
