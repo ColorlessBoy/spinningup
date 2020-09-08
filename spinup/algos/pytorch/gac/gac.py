@@ -45,13 +45,12 @@ class ReplayBuffer:
         self.size = min(self.size+1, self.max_size)
 
         self.total_num += 1
-        self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
-        self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
+        self.obs_mean += (np.array(obs) - self.obs_mean) / self.total_num
+        self.obs_square_mean += (np.array(obs)**2 - self.obs_square_mean) / self.total_num
         self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
-        self.rew_mean = self.rew_mean / self.total_num * (self.total_num - 1) + np.array(rew) / self.total_num
-        self.rew_square_mean = (self.rew_square_mean / self.total_num * (self.total_num - 1)
-                             + np.array(rew)**2 / self.total_num)
+        self.rew_mean += (np.array(rew) - self.rew_mean) / self.total_num
+        self.rew_square_mean += (np.array(rew)**2 - self.rew_square_mean) / self.total_num)
         self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-8)
 
     def sample_batch(self, batch_size=32):
