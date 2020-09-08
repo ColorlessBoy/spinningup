@@ -340,8 +340,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def get_action(o, deterministic=False):
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        return ac.act(torch.as_tensor(o, dtype=torch.float32), 
-                      deterministic)
+        return ac.act(o, deterministic)
 
     def test_agent():
         for j in range(num_test_episodes):
