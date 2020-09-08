@@ -58,7 +58,8 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
          steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
          polyak=0.995, pi_lr=1e-3, q_lr=1e-3, batch_size=100, start_steps=10000, 
          update_after=1000, update_every=50, act_noise=0.1, num_test_episodes=10, 
-         max_ep_len=1000, logger_kwargs=dict(), save_freq=1, device='cuda'):
+         max_ep_len=1000, logger_kwargs=dict(), save_freq=1, device='cuda',
+         reward_scale=1.0):
     """
     Deep Deterministic Policy Gradient (DDPG)
 
@@ -292,7 +293,7 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(o, a, r*reward_scale, o2, d)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac_targ.obs_mean = ac.obs_mean
