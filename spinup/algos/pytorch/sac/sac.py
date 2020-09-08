@@ -216,8 +216,8 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         init_value = 0.2
         if '_' in alpha:
             init_value = float(alpha.split('_')[1])
-            assert init_value > 0., "The initial value of ent_coef must be greater than 0"
-        alpha = torch.tensor(init_value)
+            assert init_value > 0., "The initial value of alpha must be greater than 0"
+        alpha = init_value
         log_alpha = torch.tensor(np.log(init_value), dtype=torch.float32, 
                             device=device, requires_grad=True)
     else:
@@ -225,9 +225,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # this will throw an error if a malformed string (different from 'auto')
         # is passed
         alpha = float(alpha)
-        alpha = torch.tensor(alpha, dtype=torch.float32, 
-            device=device, requires_grad=False)
-        log_alpha = alpha.log()
+        assert alpha > 0., "The alpha must be greater than zero."
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
@@ -329,10 +327,10 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_logalpha = compute_loss_logalpha(pi_info['LogPi'])
             loss_logalpha.backward()
             logalpha_optimizer.step()
+            alpha = torch.exp(log_alpha).detach()
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            alpha = torch.exp(log_alpha)
             for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
@@ -341,6 +339,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
     def get_action(o, deterministic=False):
+        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         return ac.act(torch.as_tensor(o, dtype=torch.float32), 
                       deterministic)
 
