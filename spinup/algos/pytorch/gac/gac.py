@@ -51,7 +51,7 @@ class ReplayBuffer:
 
         self.rew_mean += (np.array(rew) - self.rew_mean) / self.total_num
         self.rew_square_mean += (np.array(rew)**2 - self.rew_square_mean) / self.total_num
-        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-8)
+        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-4)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
