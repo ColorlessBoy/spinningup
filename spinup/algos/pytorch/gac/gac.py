@@ -14,19 +14,26 @@ class ReplayBuffer:
     A simple FIFO experience replay buffer for SAC agents.
     """
 
-    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
+    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0, reward_scale=5.0):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
+
         # For state normalization.
         self.total_num = 0
         self.obs_limit = 5.0
         self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
+
+        # For reward normalization.
+        self.rew_scale = reward_scale
+        self.rew_mean = np.zeros(1, dtype=np.float32)
+        self.rew_square_mean = np.zeros(1, dtype=np.float32)
+        self.rew_std = np.zeros(1, dtype=np.float32)
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -38,21 +45,29 @@ class ReplayBuffer:
         self.size = min(self.size+1, self.max_size)
 
         self.total_num += 1
-        self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
-        self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
+        self.obs_mean += (np.array(obs) - self.obs_mean) / self.total_num
+        self.obs_square_mean += (np.array(obs)**2 - self.obs_square_mean) / self.total_num
         self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+
+        self.rew_mean += (np.array(rew) - self.rew_mean) / self.total_num
+        self.rew_square_mean += (np.array(rew)**2 - self.rew_square_mean) / self.total_num
+        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-8)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
-                     rew=self.rew_buf[idxs],
+                     rew=self.rew_encoder(self.rew_buf[idxs]),
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+    
+    def rew_encoder(self, rew):
+        return np.array(rew)
+        # return ((np.array(rew) - self.rew_mean)/max(self.rew_std, 0.2)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
@@ -186,11 +201,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, 
+                size=replay_size, reward_scale=reward_scale)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
+
+    # auto-hyperparameters
+    beta_pi = torch.tensor(start_beta_pi, requires_grad=True, device=device)
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data, beta_q, bias_q):
@@ -256,9 +275,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
-            a3 = (2 * torch.rand_like(a2) - 1) * act_limit
+            a3 = (2 * torch.rand_like(a2) - 1)
 
-        mmd_entropy = core.mmd(a2/act_limit, a3/act_limit, kernel=kernel)
+        mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         if beta_pi <= 0.0:
             mmd_entropy.detach_()
@@ -270,15 +289,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
+    
+    def compute_loss_beta_pi(mmd_entropy):
+        loss_beta_pi = beta_pi * min(0, max_mmd_entropy - mmd_entropy)
+        return loss_beta_pi
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
+    beta_pi_optimizer = Adam([beta_pi], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data, beta_pi, beta_q, bias_q):
+    def update(data, beta_q, bias_q):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
@@ -295,7 +319,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=beta_pi)
+        loss_pi, pi_info = compute_loss_pi(data, beta_pi=max(0.0, beta_pi.detach()))
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -304,6 +328,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
+
+        # Auto tuning beta_pi
+        beta_pi_optimizer.zero_grad()
+        loss_beta_pi = compute_loss_beta_pi(pi_info["pi_penalty"])
+        loss_beta_pi.backward()
+        beta_pi_optimizer.step()
+
+        logger.store(beta_pi=beta_pi.detach())
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -330,7 +362,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(get_action(o, True))
+                o, r, d, _ = test_env.step(get_action(o, True) * act_limit)
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
@@ -352,7 +384,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a = get_action(o, deterministic=False)
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _ = env.step(a * act_limit)
         ep_ret += r
         ep_len += 1
 
@@ -362,11 +394,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         d = False if ep_len==max_ep_len else d
 
-        # Reward Modified.
-        if not d: r *= reward_scale
-
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(o, a, r*base_reward_scale, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac_targ.obs_std = ac.obs_std
@@ -384,15 +413,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
-            beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
+            # beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
             beta_q = min(start_beta_q+beta_q_velocity*epoch, max_beta_q)
             bias_q = min(start_bias_q+bias_q_velocity*epoch, max_bias_q)
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 if t >= warm_steps:
-                    update(data=batch, beta_pi=beta_pi, beta_q=beta_q, bias_q=bias_q)
+                    update(data=batch, beta_q=beta_q, bias_q=bias_q)
                 else:
-                    update(data=batch, beta_pi=0.0, beta_q=0.0, bias_q=0.0)
+                    update(data=batch, beta_q=0.0, bias_q=0.0)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -418,12 +447,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('pi_penalty', with_min_and_max=True)
             logger.log_tabular('Q_penalty', with_min_and_max=True)
+            logger.log_tabular('beta_pi', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
             # Normalize State
-            print("obs_mean="+str(replay_buffer.obs_mean))
-            print("obs_std=" +str(replay_buffer.obs_std))
+            print("obs_mean=" + str(replay_buffer.obs_mean))
+            print("obs_std=" + str(replay_buffer.obs_std))
+            print("reward_mean=" + str(replay_buffer.rew_mean))
+            print("reward_std=" + str(replay_buffer.rew_std))
 
 if __name__ == '__main__':
     import argparse
