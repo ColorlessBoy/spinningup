@@ -41,7 +41,7 @@ class ReplayBuffer:
         self.total_num += 1
         self.obs_mean += (np.array(obs) - self.obs_mean) / self.total_num
         self.obs_square_mean += (np.array(obs)**2 - self.obs_square_mean) / self.total_num
-        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-4)
+        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-2)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
