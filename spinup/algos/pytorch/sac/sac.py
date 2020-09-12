@@ -39,9 +39,10 @@ class ReplayBuffer:
         self.size = min(self.size+1, self.max_size)
 
         self.total_num += 1
+        obs = np.clip(obs, -200, 200)
         self.obs_mean += (np.array(obs) - self.obs_mean) / self.total_num
         self.obs_square_mean += (np.array(obs)**2 - self.obs_square_mean) / self.total_num
-        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-4)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
@@ -59,7 +60,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, lr=1e-3, alpha='auto_0.2', batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda', target_entropy='auto'):
+        logger_kwargs=dict(), save_freq=1, device='cuda', target_entropy='auto', reward_scale=1.0):
     """
     Soft Actor-Critic (SAC)
 
@@ -379,7 +380,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(o, a, r * reward_scale, o2, d)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac_targ.obs_mean = ac.obs_mean
