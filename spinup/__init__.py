@@ -22,6 +22,8 @@ from spinup.algos.pytorch.gac.gac import gac as gac_pytorch
 from spinup.algos.pytorch.gsac.gsac import gsac as gsac_pytorch
 from spinup.algos.pytorch.shpo.shpo import shpo as shpo_pytorch
 
+from spinup.algos.pytorch.drsac.drsac import drsac as drsac_pytorch
+
 # Loggers
 from spinup.utils.logx import Logger, EpochLogger
 
