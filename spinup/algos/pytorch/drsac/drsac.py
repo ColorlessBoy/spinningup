@@ -285,7 +285,7 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Useful info for logging
         pi_info = dict(LogPi=logp_pi.detach().cpu().numpy(),
-                       KL=loss_kl.cpu().numpy())
+                       KL=loss_kl.detach().cpu().numpy())
 
         loss_pi += epsilon * loss_kl
 
