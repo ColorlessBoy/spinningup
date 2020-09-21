@@ -418,7 +418,6 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.mul_(0.0)
                 p_targ.data.add_(1.0 * p.data)
 
-
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
             epoch = (t+1) // steps_per_epoch
