@@ -14,7 +14,7 @@ class ReplayBuffer:
     A simple FIFO experience replay buffer for SAC agents.
     """
 
-    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0, reward_scale=5.0):
+    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
@@ -28,12 +28,6 @@ class ReplayBuffer:
         self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
-
-        # For reward normalization.
-        self.rew_scale = reward_scale
-        self.rew_mean = np.zeros(1, dtype=np.float32)
-        self.rew_square_mean = np.zeros(1, dtype=np.float32)
-        self.rew_std = np.zeros(1, dtype=np.float32)
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -49,26 +43,17 @@ class ReplayBuffer:
         self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
         self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
-        self.rew_mean = self.rew_mean / self.total_num * (self.total_num - 1) + np.array(rew) / self.total_num
-        self.rew_square_mean = (self.rew_square_mean / self.total_num * (self.total_num - 1)
-                             + np.array(rew)**2 / self.total_num)
-        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-8)
-
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
-                     rew=self.rew_encoder(self.rew_buf[idxs]),
+                     rew=self.rew_buf[idxs],
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
-    
-    def rew_encoder(self, rew):
-        return np.array(rew)
-        # return ((np.array(rew) - self.rew_mean)/max(self.rew_std, 0.2)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
@@ -76,11 +61,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        max_mmd_entropy = 2.0,
-        start_beta_pi=1.0, beta_pi_velocity=0.0, max_beta_pi=1.0,
-        start_beta_q =0.0, beta_q_velocity =0.0, max_beta_q =0.0,
-        start_bias_q =0.0, bias_q_velocity =0.0, max_bias_q =0.0, 
-        warm_steps=0, reward_scale=1.0, base_reward_scale=1.0,
+        alpha=-1.0, beta=3.0,
+        warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
@@ -204,44 +186,32 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, 
-                size=replay_size, reward_scale=reward_scale)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # auto-hyperparameters
-    log_beta_pi = torch.tensor(np.log(start_beta_pi), 
-                requires_grad=True, device=device)
-    beta_pi = start_beta_pi
+    auto_alpha = False
+    if alpha < 0.0:
+        auto_alpha = True
+        alpha = -alpha
+
+    log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
 
     # Set up function for computing SAC Q-losses
-    def compute_loss_q(data, beta_q, bias_q):
+    def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
-        a = torch.FloatTensor(a).to(device).requires_grad_(True)
+        a = torch.FloatTensor(a).to(device)
         r = torch.FloatTensor(r).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o,a)
         q2 = ac.q2(o,a)
-
-        # Q Net Regularization.
-        gradients = torch.autograd.grad(
-            outputs=q1.sum()+q2.sum(),
-            inputs=a,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True,
-        )[0]
-        gradient_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean()
-        gradient_penalty = (gradient_norm - bias_q) ** 2
-
-        if beta_q <= 0.0:
-            gradient_penalty.detach_()
 
         # Bellman backup for Q functions
 
@@ -258,17 +228,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
         loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2 + beta_q*gradient_penalty
+        loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy(),
-                      Q_penalty=gradient_norm.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy())
 
         return loss_q, q_info
 
-    # Set up function for computing SAC pi loss
-    def compute_loss_pi(data, beta_pi):
+    # Set up function for computing pi loss
+    def compute_loss_pi(data):
         o = data['obs']
         o = torch.FloatTensor(o).to(device)
 
@@ -284,33 +253,30 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
-        if beta_pi <= 0.0:
-            mmd_entropy.detach_()
-
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + beta_pi*mmd_entropy
+        loss_pi = -q_pi.mean() + alpha * mmd_entropy
 
         # Useful info for logging
-        pi_info = dict(pi_penalty=mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
 
         return loss_pi, pi_info
     
-    def compute_loss_beta_pi(mmd_entropy):
-        loss_beta_pi = log_beta_pi * (max_mmd_entropy - mmd_entropy)
-        return loss_beta_pi
+    def compute_loss_log_alpha(mmd_entropy):
+        loss_log_alpha = log_alpha * (beta - mmd_entropy)
+        return loss_log_alpha
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
-    beta_pi_optimizer = Adam([log_beta_pi], lr=lr)
+    log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data, beta_q, bias_q):
+    def update(data):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data, beta_q=beta_q, bias_q=bias_q)
+        loss_q, q_info = compute_loss_q(data)
         loss_q.backward()
         q_optimizer.step()
 
@@ -324,7 +290,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Next run one gradient descent step for pi.
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, beta_pi=max(0.0, beta_pi.detach()))
+        loss_pi, pi_info = compute_loss_pi(data)
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -334,14 +300,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
 
-        # Auto tuning beta_pi
-        beta_pi_optimizer.zero_grad()
-        loss_beta_pi = compute_loss_beta_pi(pi_info["pi_penalty"])
-        loss_beta_pi.backward()
-        beta_pi_optimizer.step()
-        beta_pi = log_beta_pi.exp().detach()
-
-        logger.store(beta_pi=beta_pi.detach())
+        # Auto tuning alpha
+        if auto_alpha:
+            log_alpha_optimizer.zero_grad()
+            loss_log_alpha = compute_loss_log_alpha(pi_info["mmd_entropy"])
+            loss_log_alpha.backward()
+            log_alpha_optimizer.step()
+        alpha = log_alpha.exp().detach()
+        logger.store(alpha=alpha)
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
@@ -360,14 +326,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        a = ac_targ.act(o, deterministic, noise=noise)
+        a = ac.act(o, deterministic, noise=noise)
         return a
 
     def test_agent():
         for j in range(num_test_episodes):
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
-                # Take deterministic actions at test time 
                 o, r, d, _ = test_env.step(get_action(o, True) * act_limit)
                 ep_ret += r
                 ep_len += 1
@@ -401,7 +366,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*base_reward_scale, o2, d)
+        replay_buffer.store(o, a, r*reward_scale, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac_targ.obs_std = ac.obs_std
@@ -419,15 +384,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
-            # beta_pi = min(start_beta_pi+beta_pi_velocity*epoch, max_beta_pi)
-            beta_q = min(start_beta_q+beta_q_velocity*epoch, max_beta_q)
-            bias_q = min(start_bias_q+bias_q_velocity*epoch, max_bias_q)
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                if t >= warm_steps:
-                    update(data=batch, beta_q=beta_q, bias_q=bias_q)
-                else:
-                    update(data=batch, beta_q=0.0, bias_q=0.0)
+                update(data=batch)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -451,17 +410,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('pi_penalty', with_min_and_max=True)
-            logger.log_tabular('Q_penalty', with_min_and_max=True)
-            logger.log_tabular('beta_pi', with_min_and_max=True)
+            logger.log_tabular('mmd_entropy', with_min_and_max=True)
+            logger.log_tabular('alpha', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
             # Normalize State
             print("obs_mean=" + str(replay_buffer.obs_mean))
             print("obs_std=" + str(replay_buffer.obs_std))
-            print("reward_mean=" + str(replay_buffer.rew_mean))
-            print("reward_std=" + str(replay_buffer.rew_std))
 
 if __name__ == '__main__':
     import argparse
