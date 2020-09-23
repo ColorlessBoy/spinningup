@@ -60,7 +60,7 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         polyak=0.995, lr=1e-3, alpha='auto_0.2', batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', target_entropy='auto', 
-        reward_scale=1.0, expand_batch=100, epsilon=0.2):
+        reward_scale=1.0, expand_batch=100, epsilon="auto_1.0", target_kl='auto'):
     """
     Distributed Robust Soft Actor-Critic (DRSAC)
 
@@ -206,6 +206,16 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nTarget entropy: \t %f\n'%target_entropy)
     target_entropy = torch.tensor(target_entropy, dtype=torch.float32, device=device)
 
+    if target_kl == 'auto':
+        # automatically set target entropy if needed
+        target_kl = 0.2 * update_every
+    else:
+        # Force conversion
+        # this will also throw an error for unexpected string
+        target_kl = float(target_kl)
+    logger.log('\nTarget kl: \t %f\n'%target_kl)
+    target_kl = torch.tensor(target_kl, dtype=torch.float32, device=device)
+
     # The entropy coefficient or entropy can be learned automatically
     # see Automating Entropy Adjustment for Maximum Entropy RL section
     # of https://arxiv.org/abs/1812.05905
@@ -229,6 +239,29 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         log_alpha = torch.tensor(np.log(alpha), dtype=torch.float32, 
                             device=device, requires_grad=True)
         assert alpha > 0., "The alpha must be greater than zero."
+    
+    # The kl coefficient can be learned automatically, too.
+    auto_epsilon = False
+    log_epsilon = 1.0
+    if isinstance(epsilon, str) and epsilon.startswith('auto'):
+        # Default initial value of ent_coef when learned
+        auto_epsilon = True
+        init_value = 1.0
+        if '_' in epsilon:
+            init_value = float(epsilon.split('_')[1])
+            assert init_value > 0., "The initial value of epsilon must be greater than 0"
+        epsilon = init_value
+        log_epsilon = torch.tensor(np.log(init_value), dtype=torch.float32, 
+                            device=device, requires_grad=True)
+    else:
+        # Force conversion to float
+        # this will throw an error if a malformed string (different from 'auto')
+        # is passed
+        epsilon = float(epsilon)
+        log_epsilon = torch.tensor(np.log(epsilon), dtype=torch.float32, 
+                            device=device, requires_grad=True)
+        assert epsilon > 0., "The epsilon must be greater than zero."
+
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
@@ -286,22 +319,31 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_kl = (logp_pi - pre_logp_pi).mean()
 
         # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy(),
-                       KL=loss_kl.detach().cpu().numpy())
+        with torch.no_grad():
+            kl = torch.dot(logp_pi - pre_logp_pi, logp_pi.exp())/logp_pi.shape[0]
+            entropy = torch.dot(-logp_pi, logp_pi.exp())/logp_pi.shape[0]
+
+        pi_info = dict(Entropy=entropy.detach().cpu().numpy(),
+                       KL=kl.detach().cpu().numpy())
 
         loss_pi += epsilon * loss_kl
-
         return loss_pi, pi_info
     
-    def compute_loss_logalpha(logp_pi):
-        logp_pi = torch.FloatTensor(logp_pi).to(device)
-        loss_logalpha = -log_alpha * (logp_pi + target_entropy).mean()
+    def compute_loss_logalpha(entropy):
+        entropy = torch.FloatTensor(entropy).to(device)
+        loss_logalpha = log_alpha * (entropy - target_entropy).mean()
         return loss_logalpha
+
+    def compute_loss_logepsilon(kl):
+        kl = torch.FloatTensor(kl).to(device)
+        loss_logepsilon = -log_epsilon* (kl - target_kl).mean()
+        return loss_logepsilon
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
     logalpha_optimizer = Adam([log_alpha], lr=lr)
+    logepsilon_optimizer = Adam([log_epsilon], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -337,11 +379,21 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update alpha
         if auto_alpha:
             logalpha_optimizer.zero_grad()
-            loss_logalpha = compute_loss_logalpha(pi_info['LogPi'])
+            loss_logalpha = compute_loss_logalpha(pi_info['Entropy'])
             loss_logalpha.backward()
             logalpha_optimizer.step()
             alpha = torch.exp(log_alpha).detach()
-
+            logger.store(alpha=alpha.item())
+        
+        # Update epsilon
+        if auto_epsilon:
+            logepsilon_optimizer.zero_grad()
+            loss_logepsilon = compute_loss_logepsilon(pi_info['KL'])
+            loss_logepsilon.backward()
+            logepsilon_optimizer.step()
+            epsilon = torch.exp(log_epsilon).detach()
+            logger.store(epsilon=epsilon.item())
+        
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
             for p, p_targ in zip(ac.q1.parameters(), ac_targ.q1.parameters()):
@@ -440,11 +492,15 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', with_min_and_max=True)
             logger.log_tabular('Q2Vals', with_min_and_max=True)
-            logger.log_tabular('LogPi', with_min_and_max=True)
-            logger.log_tabular('KL', with_min_and_max=True)
+            logger.log_tabular('Entropy', average_only=True)
+            logger.log_tabular('KL', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
+            if auto_alpha:
+                logger.log_tabular('alpha', average_only=True)
+            if auto_epsilon:
+                logger.log_tabular('epsilon', average_only=True)
             logger.dump_tabular()
 
 if __name__ == '__main__':

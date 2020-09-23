@@ -66,7 +66,7 @@ class SquashedGaussianMLPActor(nn.Module):
 
         return pi_action, logp_pi
 
-    def get_log_prob(self, obs, actions):
+    def get_log_prob(self, obs, pi_action):
         net_out = self.net(obs)
         mu = self.mu_layer(net_out)
         log_std = self.log_std_layer(net_out)
@@ -75,7 +75,9 @@ class SquashedGaussianMLPActor(nn.Module):
 
         # Pre-squash distribution and sample
         pi_distribution = Normal(mu, std)
-        return pi_distribution.log_prob(actions).sum(1, keepdim=True)
+        logp_pi = pi_distribution.log_prob(pi_action).sum(axis=-1)
+        logp_pi -= (2*(np.log(2) - pi_action - F.softplus(-2*pi_action))).sum(axis=1)
+        return logp_pi
 
 class MLPQFunction(nn.Module):
 
