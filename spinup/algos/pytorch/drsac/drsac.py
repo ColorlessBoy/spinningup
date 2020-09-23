@@ -279,8 +279,8 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Entropy-regularized policy loss
         loss_pi = (alpha * logp_pi - q_pi).mean()
 
-        with torch.no_grad():
-            pre_logp_pi = ac_targ.pi.get_log_prob(o, pi)
+        # We need \nabla_a pre_logp_pi.
+        pre_logp_pi = ac_targ.pi.get_log_prob(o, pi)
 
         # KL-regularized policy loss
         loss_kl = (logp_pi - pre_logp_pi).mean()
