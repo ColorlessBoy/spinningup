@@ -238,7 +238,7 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         alpha = float(alpha)
         log_alpha = torch.tensor(np.log(alpha), dtype=torch.float32, 
                             device=device, requires_grad=True)
-        assert alpha > 0., "The alpha must be greater than zero."
+        assert alpha >= 0., "The alpha must be greater than zero."
     
     # The kl coefficient can be learned automatically, too.
     auto_epsilon = False
@@ -260,7 +260,7 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         epsilon = float(epsilon)
         log_epsilon = torch.tensor(np.log(epsilon), dtype=torch.float32, 
                             device=device, requires_grad=True)
-        assert epsilon > 0., "The epsilon must be greater than zero."
+        assert epsilon >= 0., "The epsilon must be greater than zero."
 
 
     # Set up function for computing SAC Q-losses
