@@ -331,12 +331,12 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     
     def compute_loss_logalpha(entropy):
         entropy = torch.FloatTensor(entropy).to(device)
-        loss_logalpha = log_alpha.clamp(-10, 10) * (entropy - target_entropy).mean()
+        loss_logalpha = log_alpha * (entropy - target_entropy).mean()
         return loss_logalpha
 
     def compute_loss_logepsilon(kl):
         kl = torch.FloatTensor(kl).to(device)
-        loss_logepsilon = -log_epsilon.clamp(-10, 10) * (kl - target_kl).mean()
+        loss_logepsilon = -log_epsilon * (kl - target_kl).mean()
         return loss_logepsilon
 
     # Set up optimizers for policy and q-function
