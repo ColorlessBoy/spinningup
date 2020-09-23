@@ -208,7 +208,7 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     if target_kl == 'auto':
         # automatically set target entropy if needed
-        target_kl = 0.2 * update_every
+        target_kl = 0.1 * update_every
     else:
         # Force conversion
         # this will also throw an error for unexpected string
