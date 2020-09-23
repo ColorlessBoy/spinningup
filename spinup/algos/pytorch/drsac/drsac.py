@@ -320,8 +320,8 @@ def drsac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Useful info for logging
         with torch.no_grad():
-            kl = torch.dot(logp_pi - pre_logp_pi, logp_pi.exp())/logp_pi.shape[0]
-            entropy = torch.dot(-logp_pi, logp_pi.exp())/logp_pi.shape[0]
+            kl = loss_kl
+            entropy = -logp_pi.mean()
 
         pi_info = dict(Entropy=entropy.detach().cpu().numpy(),
                        KL=kl.detach().cpu().numpy())
