@@ -262,7 +262,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_pi, pi_info
     
     def compute_loss_log_alpha(mmd_entropy):
-        loss_log_alpha = log_alpha * (beta - mmd_entropy)
+        if log_alpha < -5.0:
+            loss_log_alpha = -log_alpha
+        elif log_alpha > 5.0:
+            loss_log_alpha = log_alpha
+        else:
+            loss_log_alpha = log_alpha * (beta - mmd_entropy)
         return loss_log_alpha
 
     # Set up optimizers for policy and q-function
