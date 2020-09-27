@@ -20,6 +20,7 @@ class ReplayBuffer:
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
+        self.cost_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
 
@@ -30,11 +31,12 @@ class ReplayBuffer:
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
 
-    def store(self, obs, act, rew, next_obs, done):
+    def store(self, obs, act, rew, cost, next_obs, done):
         self.obs_buf[self.ptr] = obs
         self.obs2_buf[self.ptr] = next_obs
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
+        self.cost_buf[self.ptr] = cost
         self.done_buf[self.ptr] = done
         self.ptr = (self.ptr+1) % self.max_size
         self.size = min(self.size+1, self.max_size)
@@ -50,6 +52,7 @@ class ReplayBuffer:
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
                      rew=self.rew_buf[idxs],
+                     cost=self.cost_buf[idxs],
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
@@ -62,7 +65,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        alpha=-1.0, beta=3.0,
+        alpha=-1.0, beta=3.0, penalty=0.0,
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian'):
     """
@@ -184,7 +187,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
-    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
+    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters(),
+                               ac.q3.parameters(), ac.q4.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -201,39 +205,50 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
 
-    # Set up function for computing SAC Q-losses
+    # Set up function for computing Q-losses
     def compute_loss_q(data):
-        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+        o, a, r, c, o2, d = data['obs'], data['act'], data['rew'], data['cost'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
         a = torch.FloatTensor(a).to(device)
         r = torch.FloatTensor(r).to(device)
+        c = torch.FloatTensor(c).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o,a)
         q2 = ac.q2(o,a)
+        q3 = ac.q3(o,a)
+        q4 = ac.q4(o,a)
 
         # Bellman backup for Q functions
 
         with torch.no_grad():
             # Target actions come from *current* policy
             a2 = ac_targ.pi(o2)
-
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
             q2_pi_targ = ac_targ.q2(o2, a2)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * q_pi_targ
 
+            q3_pi_targ = ac_targ.q3(o2, a2)
+            q4_pi_targ = ac_targ.q4(o2, a2)
+            cost_q_pi_targ = torch.min(q3_pi_targ, q4_pi_targ)
+            cost_backup = -c + gamma * (1 - d) * cost_q_pi_targ
+
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
         loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q3 = ((q2 - cost_backup)**2).mean()
+        loss_q4 = ((q2 - cost_backup)**2).mean()
+        loss_q = loss_q1 + loss_q2 + loss_q3 + loss_q4
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy(),
+                      Q3Vals=q3.detach().cpu().numpy(),
+                      Q4Vals=q4.detach().cpu().numpy())
 
         return loss_q, q_info
 
@@ -248,6 +263,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
+        q3_pi = ac.q3(o2, a2)
+        q4_pi = ac.q4(o2, a2)
+        cost_q_pi = torch.min(q3_pi, q4_pi)
+
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1)
@@ -255,7 +274,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + alpha * mmd_entropy
+        loss_pi = -q_pi.mean() + alpha * mmd_entropy - penalty * cost_q_pi.mean()
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
@@ -363,8 +382,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
+        c = info.get('cost', 0.0)
         ep_ret += info.get('goal_met', 0.0)
-        ep_cost += info.get('cost', 0.0)
+        ep_cost += c
         ep_len += 1
 
         # Ignore the "done" signal if it comes from hitting the time
@@ -374,7 +394,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*reward_scale, o2, d)
+        replay_buffer.store(o, a, r*reward_scale, c, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac_targ.obs_std = ac.obs_std
