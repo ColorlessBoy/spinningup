@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.optim import Adam
 import gym
+import safety_gym
 import time
 import spinup.algos.pytorch.gac.core as core
 from spinup.utils.logx import EpochLogger
@@ -336,17 +337,18 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def test_agent():
         for j in range(num_test_episodes):
-            o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
+            o, d, ep_ret, ep_cost, ep_len = test_env.reset(), False, 0, 0, 0
             while not(d or (ep_len == max_ep_len)):
-                o, r, d, _ = test_env.step(get_action(o, True) * act_limit)
-                ep_ret += r
+                o, r, d, info = test_env.step(get_action(o, True) * act_limit)
+                ep_ret += info.get('goal_met', 0.0)
+                ep_cost += info.get('cost', 0.0)
                 ep_len += 1
-            logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+            logger.store(TestEpRet=ep_ret, TestEpCost=ep_cost, TestEpLen=ep_len)
 
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
@@ -360,8 +362,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a = get_action(o, deterministic=False)
 
         # Step the env
-        o2, r, d, _ = env.step(a * act_limit)
-        ep_ret += r
+        o2, r, d, info = env.step(a * act_limit)
+        ep_ret += info.get('goal_met', 0.0)
+        ep_cost += info.get('cost', 0.0)
         ep_len += 1
 
         # Ignore the "done" signal if it comes from hitting the time
@@ -383,8 +386,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
-            logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, ep_ret, ep_len = env.reset(), 0, 0
+            logger.store(EpRet=ep_ret, EpCost=ep_cost, EpLen=ep_len)
+            o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
 
         # Update handling
         if t >= update_after and t % update_every == 0:
@@ -407,7 +410,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
             logger.log_tabular('EpRet', with_min_and_max=True)
+            logger.log_tabular('EpCost', with_min_and_max=True)
             logger.log_tabular('TestEpRet', with_min_and_max=True)
+            logger.log_tabular('TestEpCost', with_min_and_max=True)
             logger.log_tabular('EpLen', average_only=True)
             logger.log_tabular('TestEpLen', average_only=True)
             logger.log_tabular('TotalEnvInteracts', t)

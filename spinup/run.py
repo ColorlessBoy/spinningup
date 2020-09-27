@@ -4,6 +4,7 @@ from spinup.utils.run_utils import ExperimentGrid
 from spinup.utils.serialization_utils import convert_json
 import argparse
 import gym
+import safety_gym
 import json
 import os, subprocess, sys
 import os.path as osp
