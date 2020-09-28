@@ -456,7 +456,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Auto tuning alpha
         if cost_auto_alpha:
             log_cost_alpha_optimizer.zero_grad()
-            loss_log_cost_alpha = compute_loss_log_cost_alpha(cost_pi_info["cost_mmd_entropy"])
+            loss_log_cost_alpha = compute_loss_log_cost_alpha(cost_pi_info["mmd_entropy"])
             loss_log_cost_alpha.backward()
             log_cost_alpha_optimizer.step()
         cost_alpha = log_cost_alpha.exp().detach()
@@ -513,12 +513,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
+
+        if t == start_cost_steps + 1:
+            replay_buffer.size = 0
+            replay_buffer.ptr = 0
+
         if t <= start_steps:
             a = env.action_space.sample()
             cost_a = np.zeros_like(a)
         elif t <= start_cost_steps:
             a = get_action(o, deterministic=False)
             cost_a = np.zeros_like(a)
+        elif t <= start_cost_steps + start_steps:
+            a = get_action(o, deterministic=False)
+            cost_a = env.action_space.sample()
         else:
             a = get_action(o, deterministic=False)
             cost_a = get_cost_action(o, a, deterministic=False)
@@ -579,7 +587,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            test_agent()
+            if t <= start_cost_steps:
+                test_agent()
+            else:
+                cost_test_agent()
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
