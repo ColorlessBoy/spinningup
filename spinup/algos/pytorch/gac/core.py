@@ -57,20 +57,14 @@ class MLPQFunction(nn.Module):
 
 class MLPActorCritic(nn.Module):
 
-    def __init__(self, observation_space, action_space, hidden_sizes=(256,256),
+    def __init__(self, obs_dim, act_dim, hidden_sizes=(256,256),
                  activation=nn.LeakyReLU(negative_slope=0.2)):
         super().__init__()
-
-        obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
 
         # build policy and value functions
         self.pi = GenerativeGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation)
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
-
-        self.q3 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
-        self.q4 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
         self.obs_mean = torch.FloatTensor([0.0])
         self.obs_std = torch.FloatTensor([0.0])

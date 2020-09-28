@@ -19,6 +19,7 @@ class ReplayBuffer:
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.cost_act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.cost_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
@@ -31,10 +32,11 @@ class ReplayBuffer:
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
 
-    def store(self, obs, act, rew, cost, next_obs, done):
+    def store(self, obs, act, cost_act, rew, cost, next_obs, done):
         self.obs_buf[self.ptr] = obs
         self.obs2_buf[self.ptr] = next_obs
         self.act_buf[self.ptr] = act
+        self.cost_act_buf[self.ptr] = cost_act
         self.rew_buf[self.ptr] = rew
         self.cost_buf[self.ptr] = cost
         self.done_buf[self.ptr] = done
@@ -171,7 +173,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
@@ -179,16 +181,18 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_limit = env.action_space.high[0]
 
     # Create actor-critic module and target networks
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
+    ac = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
+
+    cost_ac = actor_critic(obs_dim + act_dim, act_dim, **ac_kwargs).to(device)
+    cost_ac_targ = deepcopy(cost_ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
         p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
-    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters(),
-                               ac.q3.parameters(), ac.q4.parameters())
+    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -207,19 +211,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing Q-losses
     def compute_loss_q(data):
-        o, a, r, c, o2, d = data['obs'], data['act'], data['rew'], data['cost'], data['obs2'], data['done']
+        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
         a = torch.FloatTensor(a).to(device)
         r = torch.FloatTensor(r).to(device)
-        c = torch.FloatTensor(c).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o,a)
         q2 = ac.q2(o,a)
-        q3 = ac.q3(o,a)
-        q4 = ac.q4(o,a)
 
         # Bellman backup for Q functions
 
@@ -232,23 +233,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * q_pi_targ
 
-            q3_pi_targ = ac_targ.q3(o2, a2)
-            q4_pi_targ = ac_targ.q4(o2, a2)
-            cost_q_pi_targ = torch.min(q3_pi_targ, q4_pi_targ)
-            cost_backup = -c + gamma * (1 - d) * cost_q_pi_targ
-
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
         loss_q2 = ((q2 - backup)**2).mean()
-        loss_q3 = ((q2 - cost_backup)**2).mean()
-        loss_q4 = ((q2 - cost_backup)**2).mean()
-        loss_q = loss_q1 + loss_q2 + loss_q3 + loss_q4
+        loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy(),
-                      Q3Vals=q3.detach().cpu().numpy(),
-                      Q4Vals=q4.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy())
 
         return loss_q, q_info
 
@@ -263,10 +255,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2_pi = ac.q2(o2, a2)
         q_pi = torch.min(q1_pi, q2_pi)
 
-        q3_pi = ac.q3(o2, a2)
-        q4_pi = ac.q4(o2, a2)
-        cost_q_pi = torch.min(q3_pi, q4_pi)
-
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
             a3 = (2 * torch.rand_like(a2) - 1)
@@ -274,7 +262,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + alpha * mmd_entropy - penalty * cost_q_pi.mean()
+        loss_pi = -q_pi.mean() + alpha * mmd_entropy
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
@@ -336,17 +324,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak)
-                p_targ.data.add_((1 - polyak) * p.data)
+            smooth_update(ac.q1, ac_targ.q1, polyak)
+            smooth_update(ac.q2, ac_targ.q2, polyak)
 
-            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_((1 - pi_lr))
-                p_targ.data.add_(pi_lr * p.data)
+    def smooth_update(model, model_targ, polyak=polyak):
+        for p, p_targ in zip(model.parameters(), model_targ.parameters()):
+            p_targ.data.mul_(polyak)
+            p_targ.data.add_((1 - polyak) * p.data)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -394,7 +378,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*reward_scale, c, o2, d)
+        replay_buffer.store(o, a, np.zeros_like(a), r*reward_scale, c, o2, d)
         ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
         ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
         ac_targ.obs_std = ac.obs_std
