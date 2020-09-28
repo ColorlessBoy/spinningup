@@ -225,7 +225,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         with torch.no_grad():
             # Target actions come from *current* policy
-            a2 = ac_targ.pi(o2)
+            a2 = ac.pi(o2)
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
             q2_pi_targ = ac_targ.q2(o2, a2)
