@@ -213,6 +213,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer.obs_std = ac.obs_std.data.detach().cpu().numpy()
+    replay_buffer.obs_mean = ac.obs_mean.data.detach().cpu().numpy()
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -378,7 +380,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_log_cost_alpha = log_cost_alpha * (cost_beta - cost_mmd_entropy)
         return loss_log_cost_alpha
 
-
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
@@ -391,10 +392,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver({'ac':ac.state_dict(), 'cost_ac':cost_ac.state_dict()})
 
+    def smooth_set(t_targ, t, polyak=polyak):
+        t_targ.mul_(polyak)
+        t_targ.add_((1 - polyak) * t)
+
     def smooth_update(model, model_targ, polyak=polyak):
         for p, p_targ in zip(model.parameters(), model_targ.parameters()):
-            p_targ.data.mul_(polyak)
-            p_targ.data.add_((1 - polyak) * p.data)
+            smooth_set(p_targ.data, p.data)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
@@ -558,17 +562,25 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, cost_a, r*reward_scale, c, o2, d)
-        ac.obs_std.data = torch.FloatTensor(replay_buffer.obs_std).to(device)
-        ac.obs_mean.data = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-        ac_targ.obs_std.data = ac.obs_std
-        ac_targ.obs_mean.data = ac.obs_mean
 
-        act_std  = torch.ones(act_dim, dtype=torch.float32).to(device)
-        act_mean = torch.zeros(act_dim, dtype=torch.float32).to(device)
-        cost_ac.obs_std.data = torch.cat([ac.obs_std, act_std], dim=-1)
-        cost_ac.obs_mean.data = torch.cat([ac.obs_mean, act_mean], dim=-1)
-        cost_ac_targ.obs_std.data = cost_ac.obs_std
-        cost_ac_targ.obs_mean.data = cost_ac.obs_mean
+        with torch.no_grad():
+            obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
+            obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
+            if t <= start_cost_steps:
+                smooth_set(ac.obs_std.data, obs_std)
+                smooth_set(ac.obs_mean.data, obs_mean)
+                smooth_set(ac_targ.obs_std.data, obs_std)
+                smooth_set(ac_targ.obs_mean.data, obs_mean)
+
+            act_std  = torch.ones(act_dim, dtype=torch.float32).to(device)
+            act_mean = torch.zeros(act_dim, dtype=torch.float32).to(device)
+            cost_obs_std = torch.cat([ac.obs_std, act_std], dim=-1)
+            cost_obs_mean = torch.cat([ac.obs_mean, act_mean], dim=-1)
+
+            smooth_set(cost_ac.obs_std.data, cost_obs_std)
+            smooth_set(cost_ac.obs_std.data, cost_obs_std)
+            smooth_set(cost_ac_targ.obs_std.data, cost_obs_std)
+            smooth_set(cost_ac_targ.obs_std.data, cost_obs_std)
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
@@ -622,8 +634,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.dump_tabular()
 
             # Normalize State
-            print("obs_mean=" + str(replay_buffer.obs_mean))
-            print("obs_std=" + str(replay_buffer.obs_std))
+            print("obs_mean=" + str(ac.obs_mean))
+            print("obs_std=" + str(ac.obs_std))
 
 if __name__ == '__main__':
     import argparse
