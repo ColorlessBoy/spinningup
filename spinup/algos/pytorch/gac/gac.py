@@ -598,8 +598,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 batch = replay_buffer.sample_batch(batch_size)
                 if t <= start_cost_steps:
                     update(data=batch)
-                else:
-                    cost_update(data=batch)
+                # always update cost_ac.
+                cost_update(data=batch)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
