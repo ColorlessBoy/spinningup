@@ -63,16 +63,20 @@ class ReplayBuffer:
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
-        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
+        steps_per_epoch=4000, epochs=100, 
+        replay_size=int(1e6), gamma=0.99, 
+        polyak=0.995, pi_lr=1.0, lr=1e-3, 
+        batch_size=100, start_steps=10000, 
+        update_after=1000, update_every=50, 
+        num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         alpha=-1.0, beta=3.0, 
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
         start_cost_steps=200000, penalty=1.0, 
-        cost_alpha=-1.0, cost_beta=3.0, cost_gamma=0.99):
+        cost_alpha=-1.0, cost_beta=3.0, cost_gamma=0.99,
+        model_file=None):
     """
     Generative Actor-Critic (GAC)
 
@@ -189,6 +193,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     cost_ac = actor_critic(obs_dim + act_dim, act_dim, **ac_kwargs).to(device)
     cost_ac_targ = deepcopy(cost_ac)
+
+    if model_file:
+        model_parameters = torch.load(model_file)
+        ac.load_state_dict(model_parameters['ac'])
+        ac_targ.load_state_dict(model_parameters['ac'])
+        cost_ac.load_state_dict(model_parameters['cost_ac'])
+        cost_ac_targ.load_state_dict(model_parameters['cost_ac'])
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
@@ -378,7 +389,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     log_cost_alpha_optimizer = Adam([log_cost_alpha], lr=lr)
 
     # Set up model saving
-    logger.setup_pytorch_saver({'ac':ac, 'cost_ac':cost_ac})
+    logger.setup_pytorch_saver({'ac':ac.state_dict(), 'cost_ac':cost_ac.state_dict()})
 
     def smooth_update(model, model_targ, polyak=polyak):
         for p, p_targ in zip(model.parameters(), model_targ.parameters()):
@@ -518,18 +529,18 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             replay_buffer.size = 0
             replay_buffer.ptr = 0
 
-        if t <= start_steps:
-            a = env.action_space.sample()
-            cost_a = np.zeros_like(a)
-        elif t <= start_cost_steps:
-            a = get_action(o, deterministic=False)
-            cost_a = np.zeros_like(a)
-        elif t <= start_cost_steps + start_steps:
-            a = get_action(o, deterministic=False)
-            cost_a = env.action_space.sample()
-        else:
+        if t > start_cost_steps + start_steps:
             a = get_action(o, deterministic=False)
             cost_a = get_cost_action(o, a, deterministic=False)
+        elif t > start_cost_steps:
+            a = get_action(o, deterministic=False)
+            cost_a = env.action_space.sample()
+        elif t > start_steps:
+            a = get_action(o, deterministic=False)
+            cost_a = np.zeros_like(a)
+        else:
+            a = env.action_space.sample()
+            cost_a = np.zeros_like(a)
 
 
         # Step the env
@@ -547,17 +558,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, cost_a, r*reward_scale, c, o2, d)
-        ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
-        ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-        ac_targ.obs_std = ac.obs_std
-        ac_targ.obs_mean = ac.obs_mean
+        ac.obs_std.data = torch.FloatTensor(replay_buffer.obs_std).to(device)
+        ac.obs_mean.data = torch.FloatTensor(replay_buffer.obs_mean).to(device)
+        ac_targ.obs_std.data = ac.obs_std
+        ac_targ.obs_mean.data = ac.obs_mean
 
         act_std  = torch.ones(act_dim, dtype=torch.float32).to(device)
         act_mean = torch.zeros(act_dim, dtype=torch.float32).to(device)
-        cost_ac.obs_std = torch.cat([ac.obs_std, act_std], dim=-1)
-        cost_ac.obs_mean = torch.cat([ac.obs_mean, act_mean], dim=-1)
-        cost_ac_targ.obs_std = cost_ac.obs_std
-        cost_ac_targ.obs_mean = cost_ac.obs_mean
+        cost_ac.obs_std.data = torch.cat([ac.obs_std, act_std], dim=-1)
+        cost_ac.obs_mean.data = torch.cat([ac.obs_mean, act_mean], dim=-1)
+        cost_ac_targ.obs_std.data = cost_ac.obs_std
+        cost_ac_targ.obs_mean.data = cost_ac.obs_mean
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
