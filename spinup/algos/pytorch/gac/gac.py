@@ -75,7 +75,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
         start_cost_steps=200000, penalty=1.0, 
-        cost_alpha=-1.0, cost_beta=3.0, cost_gamma=0.99,
+        cost_alpha=-1.0, cost_beta=3.0, cost_gamma=0.99, cost_penalty=0.2,
         model_file=None):
     """
     Generative Actor-Critic (GAC)
@@ -306,11 +306,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_log_alpha
 
     def compute_loss_cost_q(data):
-        o, a, cost_a, c, o2, d = data['obs'], data['act'], data['cost_act'], data['cost'], data['obs2'], data['done']
+        o, a, cost_a, r, c, o2, d = data['obs'], data['act'], data['cost_act'], data['rew'], data['cost'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
         a = torch.FloatTensor(a).to(device)
         cost_a = torch.FloatTensor(cost_a).to(device)
+        r = torch.FloatTensor(r).to(device)
         c = torch.FloatTensor(c).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
@@ -330,7 +331,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             cost_q1_pi_targ = cost_ac_targ.q1(cost_o2, cost_a2)
             cost_q2_pi_targ = cost_ac_targ.q2(cost_o2, cost_a2)
             cost_q_pi_targ = torch.min(cost_q1_pi_targ, cost_q2_pi_targ)
-            cost_backup = -c + cost_gamma * (1 - d) * cost_q_pi_targ
+            cost_backup = cost_penalty*r-c + cost_gamma * (1 - d) * cost_q_pi_targ
 
         # MSE loss against Bellman backup
         loss_cost_q1 = ((cost_q1 - cost_backup)**2).mean()
@@ -548,7 +549,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
         # Step the env
-        o2, r, d, info = env.step((a + penalty * cost_a) * act_limit)
+        if t > start_cost_steps:
+            o2, r, d, info = env.step((a + penalty * cost_a) / (1 + penalty) * act_limit)
+        else:
+            o2, r, d, info = env.step(a * act_limit)
         c = info.get('cost', 0.0)
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
@@ -598,8 +602,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 batch = replay_buffer.sample_batch(batch_size)
                 if t <= start_cost_steps:
                     update(data=batch)
-                # always update cost_ac.
-                cost_update(data=batch)
+                else:
+                    cost_update(data=batch)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:

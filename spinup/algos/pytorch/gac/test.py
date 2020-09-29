@@ -49,7 +49,7 @@ def test(device, env, model_file, epoch=10, max_ep_len=1000, render=False, penal
             a = get_action(o, deterministic=False)
             cost_a = get_cost_action(o, a, deterministic=False)
 
-            o, r, d, info = env.step((a + penalty * cost_a) * act_limit)
+            o, r, d, info = env.step((a + penalty * cost_a) / (1 + penalty) * act_limit)
             c = info.get('cost', 0.0)
             ep_ret += info.get('goal_met', 0.0)
             ep_cost += c
