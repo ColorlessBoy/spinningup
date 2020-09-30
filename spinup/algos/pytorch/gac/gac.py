@@ -68,7 +68,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        alpha=-0.01, beta=2.0, penalty=-0.01, largest_cost=0.05,
+        alpha=-0.01, beta=2.0, penalty=-0.1, cost_lr=1e-3, largest_cost=0.0,
         warm_steps=0, reward_scale=1.0, cost_scale=1.0,
         kernel='energy', noise='gaussian',
         model_file=None):
@@ -316,10 +316,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_log_alpha
 
     def compute_loss_log_penalty(cost):
-        logger.store(batch_cost=cost)
         if log_penalty< -5.0:
             loss_log_penalty = -log_penalty
-        elif log_penalty > 3.0:
+        elif log_penalty > 1.0:
             loss_log_penalty = log_penalty
         else:
             loss_log_penalty = log_penalty * (largest_cost - cost)
@@ -330,7 +329,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_optimizer = Adam(q_params, lr=lr)
     cq_optimizer = Adam(cq_params, lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
-    log_penalty_optimizer = Adam([log_penalty], lr=lr)
+    log_penalty_optimizer = Adam([log_penalty], lr=cost_lr)
 
     # Set up model saving
     logger.setup_pytorch_saver({'ac':ac.state_dict()})
@@ -344,15 +343,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             smooth_set(p_targ.data, p.data)
 
     def update(data):
-        # auto penalty
-        if auto_penalty:
-            log_penalty_optimizer.zero_grad()
-            loss_log_penalty = compute_loss_log_penalty(data['cost'].mean())
-            loss_log_penalty.backward()
-            log_penalty_optimizer.step()
-        penalty = log_penalty.exp().detach()
-        logger.store(penalty=penalty)
-
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         cq_optimizer.zero_grad()
@@ -442,6 +432,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         ep_cost += c
         ep_len += 1
 
+        # auto penalty
+        if auto_penalty:
+            log_penalty_optimizer.zero_grad()
+            loss_log_penalty = compute_loss_log_penalty(c)
+            loss_log_penalty.backward()
+            log_penalty_optimizer.step()
+        penalty = log_penalty.exp().detach()
+        logger.store(penalty=penalty)
+
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
         # that isn't based on the agent's state)
@@ -467,7 +466,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpCost=ep_cost, EpLen=ep_len)
             o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
-
 
         # Update handling
         if t >= update_after and t % update_every == 0:
@@ -506,7 +504,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('mmd_entropy', average_only=True)
             logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('penalty', average_only=True)
-            logger.log_tabular('batch_cost', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
