@@ -5,7 +5,7 @@ from core import MLPActorCritic as actor_critic
 
 import time
 
-def test(device, env, model_file, epoch=10, max_ep_len=1000, render=False, penalty=1.0, hidden_sizes=[256,256]):
+def test(device, env, model_file, epoch=10, max_ep_len=1000, render=False, hidden_sizes=[256,256]):
     device = torch.device(device)
 
     env = gym.make(env)
@@ -15,28 +15,17 @@ def test(device, env, model_file, epoch=10, max_ep_len=1000, render=False, penal
     act_limit = env.action_space.high[0]
 
     ac = actor_critic(obs_dim, act_dim, hidden_sizes).to(device)
-    cost_ac = actor_critic(obs_dim+act_dim, act_dim, hidden_sizes).to(device)
 
     model_parameters = torch.load(model_file)
     ac.load_state_dict(model_parameters['ac'])
-    cost_ac.load_state_dict(model_parameters['cost_ac'])
 
     for p in ac.parameters():
-        p.requires_grad = False
-    for p in cost_ac.parameters():
         p.requires_grad = False
 
     def get_action(o, deterministic=False):
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac.act(o, deterministic)
         return a
-
-    def get_cost_action(o, a, deterministic=False):
-        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        a = torch.FloatTensor(a.reshape(1, -1)).to(device)
-        cost_o = torch.cat([o, a], dim = -1)
-        cost_a = cost_ac.act(cost_o, deterministic)
-        return cost_a
 
     total_ret, total_cost = 0, 0
     for t in range(epoch):
@@ -47,9 +36,8 @@ def test(device, env, model_file, epoch=10, max_ep_len=1000, render=False, penal
                 time.sleep(1e-3)
 
             a = get_action(o, deterministic=False)
-            cost_a = get_cost_action(o, a, deterministic=False)
 
-            o, r, d, info = env.step((a + penalty * cost_a) / (1 + penalty) * act_limit)
+            o, r, d, info = env.step(a * act_limit)
             c = info.get('cost', 0.0)
             ep_ret += info.get('goal_met', 0.0)
             ep_cost += c
@@ -66,9 +54,8 @@ if __name__ == '__main__':
     parser.add_argument('--env', type=str, default='Safexp-PointGoal1-v0')
     parser.add_argument('--model-file', type=str)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--penalty', type=float, default=0.0)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
 
-    test(args.device, args.env, args.model_file, args.epochs, penalty=args.penalty, render=args.render)
+    test(args.device, args.env, args.model_file, args.epochs, render=args.render)

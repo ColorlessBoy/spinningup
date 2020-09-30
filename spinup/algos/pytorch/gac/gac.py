@@ -19,7 +19,6 @@ class ReplayBuffer:
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.cost_act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.cost_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
@@ -32,11 +31,10 @@ class ReplayBuffer:
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
 
-    def store(self, obs, act, cost_act, rew, cost, next_obs, done):
+    def store(self, obs, act, rew, cost, next_obs, done):
         self.obs_buf[self.ptr] = obs
         self.obs2_buf[self.ptr] = next_obs
         self.act_buf[self.ptr] = act
-        self.cost_act_buf[self.ptr] = cost_act
         self.rew_buf[self.ptr] = rew
         self.cost_buf[self.ptr] = cost
         self.done_buf[self.ptr] = done
@@ -53,7 +51,6 @@ class ReplayBuffer:
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
-                     cost_act=self.cost_act_buf[idxs],
                      rew=self.rew_buf[idxs],
                      cost=self.cost_buf[idxs],
                      done=self.done_buf[idxs])
@@ -74,8 +71,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         alpha=-1.0, beta=3.0, 
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
-        start_cost_steps=200000, penalty=1.0, 
-        cost_alpha=-1.0, cost_beta=3.0, cost_gamma=0.99, cost_penalty=0.2,
         model_file=None):
     """
     Generative Actor-Critic (GAC)
@@ -191,25 +186,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ac = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
-    cost_ac = actor_critic(obs_dim + act_dim, act_dim, **ac_kwargs).to(device)
-    cost_ac_targ = deepcopy(cost_ac)
-
     if model_file:
         model_parameters = torch.load(model_file)
         ac.load_state_dict(model_parameters['ac'])
         ac_targ.load_state_dict(model_parameters['ac'])
-        cost_ac.load_state_dict(model_parameters['cost_ac'])
-        cost_ac_targ.load_state_dict(model_parameters['cost_ac'])
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
         p.requires_grad = False
-    for p in cost_ac_targ.parameters():
-        p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-    cost_q_params = itertools.chain(cost_ac.q1.parameters(), cost_ac.q2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -228,21 +215,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
 
-    # auto-hyperparameters
-    cost_auto_alpha = False
-    if cost_alpha < 0.0:
-        cost_auto_alpha = True
-        cost_alpha = -cost_alpha
-
-    log_cost_alpha = torch.tensor(np.log(cost_alpha), requires_grad=True, device=device)
-
     # Set up function for computing Q-losses
     def compute_loss_q(data):
-        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+        o, a, r, c, o2, d = data['obs'], data['act'], data['rew'], data['cost'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
         a = torch.FloatTensor(a).to(device)
         r = torch.FloatTensor(r).to(device)
+        c = torch.FloatTensor(c).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
 
@@ -305,93 +285,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_log_alpha = log_alpha * (beta - mmd_entropy)
         return loss_log_alpha
 
-    def compute_loss_cost_q(data):
-        o, a, cost_a, r, c, o2, d = data['obs'], data['act'], data['cost_act'], data['rew'], data['cost'], data['obs2'], data['done']
-
-        o = torch.FloatTensor(o).to(device)
-        a = torch.FloatTensor(a).to(device)
-        cost_a = torch.FloatTensor(cost_a).to(device)
-        r = torch.FloatTensor(r).to(device)
-        c = torch.FloatTensor(c).to(device)
-        o2 = torch.FloatTensor(o2).to(device)
-        d = torch.FloatTensor(d).to(device)
-
-        cost_o = torch.cat([o, a], dim=-1)
-        cost_q1 = cost_ac.q1(cost_o, cost_a)
-        cost_q2 = cost_ac.q2(cost_o, cost_a)
-
-        # Bellman backup for Q functions
-
-        with torch.no_grad():
-            # Target actions come from *current* policy
-            a2 = ac.pi(o2)
-            cost_o2 = torch.cat([o2, a2], dim=-1)
-            cost_a2 = cost_ac.pi(cost_o2)
-            # Target Q-values
-            cost_q1_pi_targ = cost_ac_targ.q1(cost_o2, cost_a2)
-            cost_q2_pi_targ = cost_ac_targ.q2(cost_o2, cost_a2)
-            cost_q_pi_targ = torch.min(cost_q1_pi_targ, cost_q2_pi_targ)
-            cost_backup = cost_penalty*r-c + cost_gamma * (1 - d) * cost_q_pi_targ
-
-        # MSE loss against Bellman backup
-        loss_cost_q1 = ((cost_q1 - cost_backup)**2).mean()
-        loss_cost_q2 = ((cost_q2 - cost_backup)**2).mean()
-        loss_cost_q = loss_cost_q1 + loss_cost_q2
-
-        # Useful info for logging
-        cost_q_info = dict(Q1Vals=cost_q1.detach().cpu().numpy(),
-                           Q2Vals=cost_q2.detach().cpu().numpy())
-
-        return loss_cost_q, cost_q_info
-    
-    # Set up function for computing pi loss
-    def compute_loss_cost_pi(data):
-        o, a = data['obs'], data['act']
-        o = torch.FloatTensor(o).to(device)
-        a = torch.FloatTensor(a).to(device)
-
-        cost_o = torch.cat([o, a], dim = -1)
-
-        cost_o2 = cost_o.repeat(expand_batch, 1)
-        cost_a2 = cost_ac.pi(cost_o2)
-        cost_q1_pi = cost_ac.q1(cost_o2, cost_a2)
-        cost_q2_pi = cost_ac.q2(cost_o2, cost_a2)
-        cost_q_pi = torch.min(cost_q1_pi, cost_q2_pi)
-
-        cost_a2 = cost_a2.view(expand_batch, -1, cost_a2.shape[-1]).transpose(0, 1)
-        with torch.no_grad():
-            cost_a3 = (2 * torch.rand_like(cost_a2) - 1)
-
-        cost_mmd_entropy = core.mmd(cost_a2, cost_a3, kernel=kernel)
-
-        # Entropy-regularized policy loss
-        loss_cost_pi = -cost_q_pi.mean() + cost_alpha * cost_mmd_entropy
-
-        # Useful info for logging
-        cost_pi_info = dict(mmd_entropy=cost_mmd_entropy.detach().cpu().numpy())
-
-        return loss_cost_pi, cost_pi_info
-    
-    def compute_loss_log_cost_alpha(cost_mmd_entropy):
-        if log_cost_alpha < -5.0:
-            loss_log_cost_alpha = -log_cost_alpha
-        elif log_cost_alpha > 5.0:
-            loss_log_cost_alpha = log_cost_alpha
-        else:
-            loss_log_cost_alpha = log_cost_alpha * (cost_beta - cost_mmd_entropy)
-        return loss_log_cost_alpha
-
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
-    cost_pi_optimizer = Adam(cost_ac.pi.parameters(), lr=lr)
-    cost_q_optimizer = Adam(cost_q_params, lr=lr)
-    log_cost_alpha_optimizer = Adam([log_cost_alpha], lr=lr)
-
     # Set up model saving
-    logger.setup_pytorch_saver({'ac':ac.state_dict(), 'cost_ac':cost_ac.state_dict()})
+    logger.setup_pytorch_saver({'ac':ac.state_dict()})
 
     def smooth_set(t_targ, t, polyak=polyak):
         t_targ.mul_(polyak)
@@ -442,59 +342,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             smooth_update(ac.q1, ac_targ.q1, polyak)
             smooth_update(ac.q2, ac_targ.q2, polyak)
 
-    def cost_update(data):
-        # First run one gradient descent step for Q1 and Q2
-        cost_q_optimizer.zero_grad()
-        loss_cost_q, cost_q_info = compute_loss_cost_q(data)
-        loss_cost_q.backward()
-        cost_q_optimizer.step()
-
-        # Record things
-        logger.store(LossQ=loss_cost_q.item(), **cost_q_info)
-
-        # Freeze Q-networks so you don't waste computational effort 
-        # computing gradients for them during the policy learning step.
-        for p in cost_q_params:
-            p.requires_grad = False
-
-        # Next run one gradient descent step for pi.
-        cost_pi_optimizer.zero_grad()
-        loss_cost_pi, cost_pi_info = compute_loss_cost_pi(data)
-        loss_cost_pi.backward()
-        cost_pi_optimizer.step()
-
-        for p in cost_q_params:
-            p.requires_grad = True
-
-        # Record things
-        logger.store(LossPi=loss_cost_pi.item(), **cost_pi_info)
-
-        # Auto tuning alpha
-        if cost_auto_alpha:
-            log_cost_alpha_optimizer.zero_grad()
-            loss_log_cost_alpha = compute_loss_log_cost_alpha(cost_pi_info["mmd_entropy"])
-            loss_log_cost_alpha.backward()
-            log_cost_alpha_optimizer.step()
-        cost_alpha = log_cost_alpha.exp().detach()
-        logger.store(alpha=cost_alpha)
-
-        # Finally, update target networks by polyak averaging.
-        with torch.no_grad():
-            smooth_update(cost_ac.q1, cost_ac_targ.q1, polyak)
-            smooth_update(cost_ac.q2, cost_ac_targ.q2, polyak)
-
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac.act(o, deterministic, noise=noise)
         return a
-
-    def get_cost_action(o, a, deterministic=False):
-        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-        a = torch.FloatTensor(a.reshape(1, -1)).to(device)
-        cost_o = torch.cat([o, a], dim = -1)
-        cost_a = cost_ac.act(cost_o, deterministic, noise=noise)
-        return cost_a
 
     def test_agent():
         for j in range(num_test_episodes):
@@ -506,18 +358,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpCost=ep_cost, TestEpLen=ep_len)
     
-    def cost_test_agent():
-        for j in range(num_test_episodes):
-            o, d, ep_ret, ep_cost, ep_len = test_env.reset(), False, 0, 0, 0
-            while not(d or (ep_len == max_ep_len)):
-                a = get_action(o, True)
-                cost_a = get_cost_action(o, a, True)
-                o, r, d, info = test_env.step((a + penalty * cost_a) * act_limit)
-                ep_ret += info.get('goal_met', 0.0)
-                ep_cost += info.get('cost', 0.0)
-                ep_len += 1
-            logger.store(TestEpRet=ep_ret, TestEpCost=ep_cost, TestEpLen=ep_len)
-
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
     start_time = time.time()
@@ -530,29 +370,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
 
-        if t == start_cost_steps + 1:
-            replay_buffer.size = 0
-            replay_buffer.ptr = 0
-
-        if t > start_cost_steps + start_steps:
+        if t > start_steps:
             a = get_action(o, deterministic=False)
-            cost_a = get_cost_action(o, a, deterministic=False)
-        elif t > start_cost_steps:
-            a = get_action(o, deterministic=False)
-            cost_a = env.action_space.sample()
-        elif t > start_steps:
-            a = get_action(o, deterministic=False)
-            cost_a = np.zeros_like(a)
         else:
             a = env.action_space.sample()
-            cost_a = np.zeros_like(a)
-
 
         # Step the env
-        if t > start_cost_steps:
-            o2, r, d, info = env.step((a + penalty * cost_a) / (1 + penalty) * act_limit)
-        else:
-            o2, r, d, info = env.step(a * act_limit)
+        o2, r, d, info = env.step(a * act_limit)
         c = info.get('cost', 0.0)
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
@@ -565,26 +389,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, cost_a, r*reward_scale, c, o2, d)
+        replay_buffer.store(o, a, r*reward_scale, c, o2, d)
 
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
             obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-            if t <= start_cost_steps:
-                smooth_set(ac.obs_std.data, obs_std)
-                smooth_set(ac.obs_mean.data, obs_mean)
-                smooth_set(ac_targ.obs_std.data, obs_std)
-                smooth_set(ac_targ.obs_mean.data, obs_mean)
-
-            act_std  = torch.ones(act_dim, dtype=torch.float32).to(device)
-            act_mean = torch.zeros(act_dim, dtype=torch.float32).to(device)
-            cost_obs_std = torch.cat([ac.obs_std, act_std], dim=-1)
-            cost_obs_mean = torch.cat([ac.obs_mean, act_mean], dim=-1)
-
-            smooth_set(cost_ac.obs_std.data, cost_obs_std)
-            smooth_set(cost_ac.obs_std.data, cost_obs_std)
-            smooth_set(cost_ac_targ.obs_std.data, cost_obs_std)
-            smooth_set(cost_ac_targ.obs_std.data, cost_obs_std)
+            smooth_set(ac.obs_std.data, obs_std)
+            smooth_set(ac.obs_mean.data, obs_mean)
+            smooth_set(ac_targ.obs_std.data, obs_std)
+            smooth_set(ac_targ.obs_mean.data, obs_mean)
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
@@ -595,15 +408,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.store(EpRet=ep_ret, EpCost=ep_cost, EpLen=ep_len)
             o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
 
+
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                if t <= start_cost_steps:
-                    update(data=batch)
-                else:
-                    cost_update(data=batch)
+                update(data=batch)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -614,10 +425,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            if t <= start_cost_steps:
-                test_agent()
-            else:
-                cost_test_agent()
+            test_agent()
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
@@ -632,8 +440,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('mmd_entropy', with_min_and_max=True)
-            logger.log_tabular('alpha', with_min_and_max=True)
+            logger.log_tabular('mmd_entropy', average_only=True)
+            logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
