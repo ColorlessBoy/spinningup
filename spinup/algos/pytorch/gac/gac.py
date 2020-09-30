@@ -61,7 +61,7 @@ class ReplayBuffer:
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, 
-        replay_size=int(1e6), gamma=0.99, 
+        replay_size=int(1e6), gamma=0.99, cost_gamma=0.99,
         polyak=0.995, pi_lr=1.0, lr=1e-3, 
         batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, 
@@ -69,7 +69,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         alpha=-0.01, beta=2.0, penalty=-0.01, largest_cost=0.05,
-        warm_steps=0, reward_scale=1.0, 
+        warm_steps=0, reward_scale=1.0, cost_scale=1.0,
         kernel='energy', noise='gaussian',
         model_file=None):
     """
@@ -257,7 +257,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             q3_pi_targ = ac_targ.q3(o2, a2)
             q4_pi_targ = ac_targ.q4(o2, a2)
             cq_pi_targ = torch.min(q3_pi_targ, q4_pi_targ)
-            cbackup = -c + gamma * (1 - d) * cq_pi_targ
+            cbackup = -c + cost_gamma * (1 - d) * cq_pi_targ
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
@@ -266,7 +266,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy(),
+                      Q3Vals=q3.detach().cpu().numpy(),
+                      Q4Vals=q4.detach().cpu().numpy())
 
         # MSE loss against Bellman cbackup
         loss_q3 = ((q3 - cbackup)**2).mean()
@@ -317,7 +319,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.store(batch_cost=cost)
         if log_penalty< -5.0:
             loss_log_penalty = -log_penalty
-        elif log_penalty > 1.0:
+        elif log_penalty > 3.0:
             loss_log_penalty = log_penalty
         else:
             loss_log_penalty = log_penalty * (largest_cost - cost)
@@ -447,8 +449,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*reward_scale, c, o2, d)
-
+        replay_buffer.store(o, a, r*reward_scale, c*cost_scale, o2, d) 
+ 
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
             obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
@@ -494,10 +496,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('EpLen', average_only=True)
             logger.log_tabular('TestEpLen', average_only=True)
             logger.log_tabular('TotalEnvInteracts', t)
-            logger.log_tabular('Q1Vals', with_min_and_max=True)
-            logger.log_tabular('Q2Vals', with_min_and_max=True)
+            logger.log_tabular('Q1Vals', average_only=True)
+            logger.log_tabular('Q2Vals', average_only=True)
+            logger.log_tabular('Q3Vals', average_only=True)
+            logger.log_tabular('Q4Vals', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
+            logger.log_tabular('LossCQ', average_only=True)
             logger.log_tabular('mmd_entropy', average_only=True)
             logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('penalty', average_only=True)
