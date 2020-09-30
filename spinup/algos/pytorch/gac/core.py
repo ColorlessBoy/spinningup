@@ -66,6 +66,9 @@ class MLPActorCritic(nn.Module):
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
+        self.q3 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+        self.q4 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
+
         self.obs_mean = nn.Parameter(torch.zeros(obs_dim, dtype=torch.float32))
         self.obs_std = nn.Parameter(torch.ones(obs_dim, dtype=torch.float32))
 
