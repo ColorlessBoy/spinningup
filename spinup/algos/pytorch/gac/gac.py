@@ -68,9 +68,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        alpha=-0.01, beta=2.0, penalty=0.0, 
-        cost_lr=1e-3, largest_cost=0.0, 
-        warm_steps=0, reward_scale=1.0, cost_scale=1.0,
+        alpha=-0.01, beta=2.0, 
+        penalty=0.0, largest_penalty=1.0,
+        cost_lr=1e-3, largest_cost=0.0, cost_scale=1.0, cost_bias=2.0,
+        warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
         model_file=None):
     """
@@ -307,7 +308,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_log_penalty(cost):
         if log_penalty< -5.0:
             loss_log_penalty = -log_penalty
-        elif log_penalty > 0.5:
+        elif log_penalty > np.log(largest_penalty):
             loss_log_penalty = log_penalty
         else:
             loss_log_penalty = log_penalty * (largest_cost - cost)
@@ -415,7 +416,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
         c = info.get('cost', 0.0)
-        c = 2.0 * ｃ - 1.0
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
         ep_cost_sparse += 1.0 if c > 0 else 0.0
@@ -429,7 +429,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*reward_scale, c*cost_scale, o2, d) 
+        replay_buffer.store(o, a, r*reward_scale, (c - cost_bias)*cost_scale, o2, d) 
  
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
@@ -447,7 +447,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             # auto penalty
             if auto_penalty:
-                ep_cost += max_ep_len
                 print("ep_cost = {}".format(ep_cost))
                 for _ in range(50):
                     log_penalty_optimizer.zero_grad()
