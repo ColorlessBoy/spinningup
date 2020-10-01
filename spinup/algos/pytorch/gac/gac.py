@@ -414,7 +414,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
-        c = 2 * info.get('cost', 0.0) - 1
+        c = info.get('cost', 0.0)
+        c = 2.0 * ｃ - 1.0
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
         ep_cost_sparse += 1.0 if c > 0 else 0.0
@@ -444,18 +445,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
-            logger.store(EpRet=ep_ret, EpCost=ep_cost_sparse, EpLen=ep_len)
-            o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
             # auto penalty
             if auto_penalty:
-                print("ep_cost = {}".format(ep_cost + max_ep_len))
+                ep_cost += max_ep_len
+                print("ep_cost = {}".format(ep_cost))
                 for _ in range(50):
                     log_penalty_optimizer.zero_grad()
-                    loss_log_penalty = compute_loss_log_penalty(ep_cost + max_ep_len)
+                    loss_log_penalty = compute_loss_log_penalty(ep_cost)
                     loss_log_penalty.backward()
                     log_penalty_optimizer.step()
             penalty = log_penalty.exp().detach()
             logger.store(penalty=penalty)
+
+            logger.store(EpRet=ep_ret, EpCost=ep_cost_sparse, EpLen=ep_len)
+            o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
 
         # Update handling
         if t >= update_after and t % update_every == 0:
