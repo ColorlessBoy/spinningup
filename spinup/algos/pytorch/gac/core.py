@@ -30,7 +30,7 @@ class GenerativeGaussianMLPActor(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
-        self.epsilon_dim = act_dim * act_dim
+        self.epsilon_dim = obs_dim # act_dim * act_dim
         hidden_sizes[0] += self.epsilon_dim
         self.net = mlp([obs_dim+self.epsilon_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh())
         self.apply(_weight_init)

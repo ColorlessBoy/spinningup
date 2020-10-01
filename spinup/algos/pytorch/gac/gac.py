@@ -307,7 +307,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_log_penalty(cost):
         if log_penalty< -5.0:
             loss_log_penalty = -log_penalty
-        elif log_penalty > 1.0:
+        elif log_penalty > 0.5:
             loss_log_penalty = log_penalty
         else:
             loss_log_penalty = log_penalty * (largest_cost - cost)
