@@ -197,8 +197,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
-    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
-    cq_params = itertools.chain(ac.q3.parameters(), ac.q4.parameters())
+    q_params = itertools.chain(ac.q1.parameters())
+    cq_params = itertools.chain(ac.q2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -237,11 +237,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o, a)
-        q2 = ac.q2(o, a)
 
-        # cost q value.
-        q3 = ac.q3(o, a)
-        q4 = ac.q4(o, a)
+        q2 = ac.q2(o, a)
 
         # Bellman backup for Q functions
 
@@ -250,31 +247,23 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a2 = ac.pi(o2)
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
-            q2_pi_targ = ac_targ.q2(o2, a2)
-            q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-            backup = r + gamma * (1 - d) * q_pi_targ
+            backup = r + gamma * (1 - d) * q1_pi_targ
 
             # Cost Target Q-values
-            q3_pi_targ = ac_targ.q3(o2, a2)
-            q4_pi_targ = ac_targ.q4(o2, a2)
-            cq_pi_targ = torch.min(q3_pi_targ, q4_pi_targ)
-            cbackup = -c + cost_gamma * (1 - d) * cq_pi_targ
+            q2_pi_targ = ac_targ.q2(o2, a2)
+            cbackup = -c + cost_gamma * (1 - d) * q2_pi_targ
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q = loss_q1
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy(),
-                      Q3Vals=q3.detach().cpu().numpy(),
-                      Q4Vals=q4.detach().cpu().numpy())
+                      Q2Vals=q2.detach().cpu().numpy())
 
         # MSE loss against Bellman cbackup
-        loss_q3 = ((q3 - cbackup)**2).mean()
-        loss_q4 = ((q4 - cbackup)**2).mean()
-        loss_cq = loss_q3 + loss_q4
+        loss_q2 = ((q2 - cbackup)**2).mean()
+        loss_cq = loss_q2
 
         return loss_q, loss_cq, q_info
 
@@ -287,11 +276,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         a2 = ac.pi(o2)
         q1_pi = ac.q1(o2, a2)
         q2_pi = ac.q2(o2, a2)
-        q_pi = torch.min(q1_pi, q2_pi)
-
-        q3_pi = ac.q3(o2, a2)
-        q4_pi = ac.q4(o2, a2)
-        cq_pi = torch.min(q3_pi, q4_pi)
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
@@ -299,15 +283,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
-        q_pi_std = q_pi.std().detach() + 1e-8
-        cq_pi_std = cq_pi.std().detach() + 1e-8
+        q1_pi_std = q1_pi.std().detach() + 1e-8
+        q2_pi_std = q2_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = -(q_pi.mean()/q_pi_std + penalty*cq_pi.mean()/cq_pi_std)/(1 + penalty) + alpha * mmd_entropy
+        loss_pi = -(q1_pi.mean()/q1_pi_std + penalty*q2_pi.mean()/q2_pi_std)/(1 + penalty) + alpha * mmd_entropy
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
-                       q_pi_std = q_pi_std,
-                       cq_pi_std = cq_pi_std)
+                       Q1ValsStd = q1_pi_std,
+                       Q2ValsStd = q2_pi_std)
 
         return loss_pi, pi_info
     
@@ -394,8 +378,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         with torch.no_grad():
             smooth_update(ac.q1, ac_targ.q1, polyak)
             smooth_update(ac.q2, ac_targ.q2, polyak)
-            smooth_update(ac.q3, ac_targ.q3, polyak)
-            smooth_update(ac.q4, ac_targ.q4, polyak)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -432,20 +414,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
-        c = info.get('cost', -1.0)
+        c = 2 * info.get('cost', 0.0) - 1
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
         ep_cost_sparse += 1.0 if c > 0 else 0.0
         ep_len += 1
 
-        # auto penalty
-        if auto_penalty:
-            log_penalty_optimizer.zero_grad()
-            loss_log_penalty = compute_loss_log_penalty(ep_cost)
-            loss_log_penalty.backward()
-            log_penalty_optimizer.step()
-        penalty = log_penalty.exp().detach()
-        logger.store(penalty=penalty)
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
@@ -472,6 +446,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpCost=ep_cost_sparse, EpLen=ep_len)
             o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
+            # auto penalty
+            if auto_penalty:
+                print("ep_cost = {}".format(ep_cost + max_ep_len))
+                for _ in range(50):
+                    log_penalty_optimizer.zero_grad()
+                    loss_log_penalty = compute_loss_log_penalty(ep_cost + max_ep_len)
+                    loss_log_penalty.backward()
+                    log_penalty_optimizer.step()
+            penalty = log_penalty.exp().detach()
+            logger.store(penalty=penalty)
 
         # Update handling
         if t >= update_after and t % update_every == 0:
@@ -502,10 +486,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', average_only=True)
             logger.log_tabular('Q2Vals', average_only=True)
-            logger.log_tabular('Q3Vals', average_only=True)
-            logger.log_tabular('Q4Vals', average_only=True)
-            logger.log_tabular('q_pi_std', average_only=True)
-            logger.log_tabular('cq_pi_std', average_only=True)
+            logger.log_tabular('Q1ValsStd', average_only=True)
+            logger.log_tabular('Q2ValsStd', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('LossCQ', average_only=True)
