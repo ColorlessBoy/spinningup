@@ -68,7 +68,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
-        alpha=-0.01, beta=2.0, penalty=-0.1, cost_lr=1e-3, largest_cost=0.0,
+        alpha=-0.01, beta=2.0, penalty=0.0, 
+        cost_lr=1e-3, largest_cost=0.0, 
         warm_steps=0, reward_scale=1.0, cost_scale=1.0,
         kernel='energy', noise='gaussian',
         model_file=None):
@@ -298,11 +299,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
+        q_pi_std = q_pi.std().detach() + 1e-8
+        cq_pi_std = cq_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = -(q_pi.mean() + penalty*cq_pi.mean())/(1 + penalty) + alpha * mmd_entropy
+        loss_pi = -(q_pi.mean()/q_pi_std + penalty*cq_pi.mean()/cq_pi_std)/(1 + penalty) + alpha * mmd_entropy
 
         # Useful info for logging
-        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
+                       q_pi_std = q_pi_std,
+                       cq_pi_std = cq_pi_std)
 
         return loss_pi, pi_info
     
@@ -404,14 +409,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             while not(d or (ep_len == max_ep_len)):
                 o, r, d, info = test_env.step(get_action(o, True) * act_limit)
                 ep_ret += info.get('goal_met', 0.0)
-                ep_cost += info.get('cost', 0.0)
+                ep_cost += 1.0 if info.get('cost', -1.0) > 0.0 else 0.0
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpCost=ep_cost, TestEpLen=ep_len)
     
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
     start_time = time.time()
-    o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
+    o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
@@ -427,15 +432,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
-        c = info.get('cost', 0.0)
+        c = info.get('cost', -1.0)
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
+        ep_cost_sparse += 1.0 if c > 0 else 0.0
         ep_len += 1
 
         # auto penalty
         if auto_penalty:
             log_penalty_optimizer.zero_grad()
-            loss_log_penalty = compute_loss_log_penalty(c)
+            loss_log_penalty = compute_loss_log_penalty(ep_cost)
             loss_log_penalty.backward()
             log_penalty_optimizer.step()
         penalty = log_penalty.exp().detach()
@@ -464,8 +470,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
-            logger.store(EpRet=ep_ret, EpCost=ep_cost, EpLen=ep_len)
-            o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
+            logger.store(EpRet=ep_ret, EpCost=ep_cost_sparse, EpLen=ep_len)
+            o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
 
         # Update handling
         if t >= update_after and t % update_every == 0:
@@ -498,6 +504,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('Q2Vals', average_only=True)
             logger.log_tabular('Q3Vals', average_only=True)
             logger.log_tabular('Q4Vals', average_only=True)
+            logger.log_tabular('q_pi_std', average_only=True)
+            logger.log_tabular('cq_pi_std', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('LossCQ', average_only=True)
