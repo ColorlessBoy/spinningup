@@ -70,7 +70,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         device='cuda', expand_batch=100, 
         alpha=-0.01, beta=2.0, 
         penalty=0.0, largest_penalty=1.0,
-        cost_lr=1e-3, largest_cost=0.0, cost_scale=1.0, cost_bias=2.0,
+        cost_lr=1e-3, largest_cost=0.0, 
+        cost_scale=1.0, cost_bias=2.0, died_when_unsafe=np.inf,
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
         model_file=None):
@@ -390,7 +391,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         for j in range(num_test_episodes):
             o, d, ep_ret, ep_cost, ep_len = test_env.reset(), False, 0, 0, 0
             while not(d or (ep_len == max_ep_len)):
-                o, r, d, info = test_env.step(get_action(o, True) * act_limit)
+                o, r, d, info = test_env.step(get_action(o, False) * act_limit)
                 ep_ret += info.get('goal_met', 0.0)
                 ep_cost += 1.0 if info.get('cost', -1.0) > 0.0 else 0.0
                 ep_len += 1
@@ -416,17 +417,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
         c = info.get('cost', 0.0)
-        ep_ret += info.get('goal_met', 0.0)
+        r_sparse = info.get('goal_met', 0.0)
+        ep_ret += r_sparse
         ep_cost += c
         ep_cost_sparse += 1.0 if c > 0 else 0.0
         ep_len += 1
-
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
         # that isn't based on the agent's state)
 
-        d = False if ep_len==max_ep_len else d
+        # d = False if ep_len==max_ep_len else d
+
+        if ep_cost > died_when_unsafe:
+            d = True
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r*reward_scale, (c - cost_bias)*cost_scale, o2, d) 
