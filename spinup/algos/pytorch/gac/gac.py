@@ -71,7 +71,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         alpha=-0.01, beta=2.0, 
         penalty=0.0, largest_penalty=1.0,
         cost_lr=1e-3, largest_cost=0.0, 
-        cost_scale=1.0, cost_bias=2.0, died_when_unsafe=np.inf,
+        cost_scale=1.0, cost_bias=2.0, died_when_unsafe=1e8,
         warm_steps=0, reward_scale=1.0, 
         kernel='energy', noise='gaussian',
         model_file=None):
@@ -190,9 +190,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ac_targ = deepcopy(ac)
 
     if model_file:
+        print("Load models.")
         model_parameters = torch.load(model_file)
         ac.load_state_dict(model_parameters['ac'])
         ac_targ.load_state_dict(model_parameters['ac'])
+        print("Success.")
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
@@ -298,7 +300,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_pi, pi_info
     
     def compute_loss_log_alpha(mmd_entropy):
-        if log_alpha < -5.0:
+        if log_alpha < -10.0:
             loss_log_alpha = -log_alpha
         elif log_alpha > 5.0:
             loss_log_alpha = log_alpha
@@ -307,7 +309,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_log_alpha
 
     def compute_loss_log_penalty(cost):
-        if log_penalty< -5.0:
+        if log_penalty< -10.0:
             loss_log_penalty = -log_penalty
         elif log_penalty > np.log(largest_penalty):
             loss_log_penalty = log_penalty
@@ -409,10 +411,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
 
-        if t > start_steps:
-            a = get_action(o, deterministic=False)
-        else:
+        if model_file is None and t < start_steps:
             a = env.action_space.sample()
+        else:
+            a = get_action(o, deterministic=False)
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
