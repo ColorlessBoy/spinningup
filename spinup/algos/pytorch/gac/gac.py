@@ -309,7 +309,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         return loss_log_alpha
 
     def compute_loss_log_penalty(cost):
-        if log_penalty< -10.0:
+        if log_penalty< -5.0:
             loss_log_penalty = -log_penalty
         elif log_penalty > np.log(largest_penalty):
             loss_log_penalty = log_penalty
@@ -435,7 +435,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             d = True
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r*reward_scale, (c - cost_bias)*cost_scale, o2, d) 
+        if c > 0.0:
+            replay_buffer.store(o, a, -c*cost_scale, (c - cost_bias)*cost_scale, o2, d) 
+        else:
+            replay_buffer.store(o, a, r*reward_scale, (c - cost_bias)*cost_scale, o2, d) 
  
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
