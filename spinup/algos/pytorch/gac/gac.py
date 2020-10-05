@@ -16,11 +16,10 @@ class ReplayBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
+        self.obs_buf  = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.cost_buf = np.zeros(size, dtype=np.float32)
+        self.act_buf  = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.rew_buf  = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
 
@@ -31,12 +30,11 @@ class ReplayBuffer:
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
 
-    def store(self, obs, act, rew, cost, next_obs, done):
+    def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
         self.obs2_buf[self.ptr] = next_obs
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
-        self.cost_buf[self.ptr] = cost
         self.done_buf[self.ptr] = done
         self.ptr = (self.ptr+1) % self.max_size
         self.size = min(self.size+1, self.max_size)
@@ -52,7 +50,6 @@ class ReplayBuffer:
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
                      rew=self.rew_buf[idxs],
-                     cost=self.cost_buf[idxs],
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
@@ -69,12 +66,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, 
         device='cuda', expand_batch=100, 
         alpha=-0.01, beta=2.0, 
-        penalty=0.0, largest_penalty=1.0,
-        cost_lr=1e-3, largest_cost=0.0, 
-        cost_scale=1.0, cost_bias=2.0, died_when_unsafe=1e8,
-        warm_steps=0, reward_scale=1.0, 
-        kernel='energy', noise='gaussian',
-        model_file=None):
+        reward_scale=1.0, cost_scale=1.0, mix_reward=False,
+        kernel='energy', noise='gaussian', model_file=None):
     """
     Generative Actor-Critic (GAC)
 
@@ -201,8 +194,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
-    q_params = itertools.chain(ac.q1.parameters())
-    cq_params = itertools.chain(ac.q2.parameters())
+    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -221,27 +213,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
 
-    # auto-penalty
-    auto_penalty = False
-    if penalty < 0.0:
-        auto_penalty = True
-        penalty = -penalty
-    
-    log_penalty = torch.tensor(np.log(penalty), requires_grad=True, device=device)
-
     # Set up function for computing Q-losses
     def compute_loss_q(data):
-        o, a, r, c, o2, d = data['obs'], data['act'], data['rew'], data['cost'], data['obs2'], data['done']
+        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
         o = torch.FloatTensor(o).to(device)
         a = torch.FloatTensor(a).to(device)
         r = torch.FloatTensor(r).to(device)
-        c = torch.FloatTensor(c).to(device)
         o2 = torch.FloatTensor(o2).to(device)
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o, a)
-
         q2 = ac.q2(o, a)
 
         # Bellman backup for Q functions
@@ -251,25 +233,19 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a2 = ac.pi(o2)
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
-            backup = r + gamma * (1 - d) * q1_pi_targ
-
-            # Cost Target Q-values
             q2_pi_targ = ac_targ.q2(o2, a2)
-            cbackup = -c + cost_gamma * (1 - d) * q2_pi_targ
+            backup = r + gamma * (1 - d) * torch.min(q1_pi_targ, q2_pi_targ)
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
-        loss_q = loss_q1
+        loss_q2 = ((q2 - backup)**2).mean()
+        loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
         q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
                       Q2Vals=q2.detach().cpu().numpy())
 
-        # MSE loss against Bellman cbackup
-        loss_q2 = ((q2 - cbackup)**2).mean()
-        loss_cq = loss_q2
-
-        return loss_q, loss_cq, q_info
+        return loss_q, q_info
 
     # Set up function for computing pi loss
     def compute_loss_pi(data):
@@ -280,6 +256,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         a2 = ac.pi(o2)
         q1_pi = ac.q1(o2, a2)
         q2_pi = ac.q2(o2, a2)
+        q_pi = torch.min(q1_pi, q2_pi)
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
@@ -287,20 +264,18 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
-        q1_pi_std = q1_pi.std().detach() + 1e-8
-        q2_pi_std = q2_pi.std().detach() + 1e-8
+        q_pi_std = q_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = -(q1_pi.mean()/q1_pi_std + penalty*q2_pi.mean()/q2_pi_std)/(1 + penalty) + alpha * mmd_entropy
+        loss_pi = -q_pi.mean()/q_pi_std + alpha * mmd_entropy
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
-                       Q1ValsStd = q1_pi_std,
-                       Q2ValsStd = q2_pi_std)
+                       QValsStd = q_pi_std)
 
         return loss_pi, pi_info
     
     def compute_loss_log_alpha(mmd_entropy):
-        if log_alpha < -10.0:
+        if log_alpha < -5.0:
             loss_log_alpha = -log_alpha
         elif log_alpha > 5.0:
             loss_log_alpha = log_alpha
@@ -308,21 +283,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_log_alpha = log_alpha * (beta - mmd_entropy)
         return loss_log_alpha
 
-    def compute_loss_log_penalty(cost):
-        if log_penalty< -5.0:
-            loss_log_penalty = -log_penalty
-        elif log_penalty > np.log(largest_penalty):
-            loss_log_penalty = log_penalty
-        else:
-            loss_log_penalty = log_penalty * (largest_cost - cost)
-        return loss_log_penalty
-
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
-    cq_optimizer = Adam(cq_params, lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
-    log_penalty_optimizer = Adam([log_penalty], lr=cost_lr)
 
     # Set up model saving
     logger.setup_pytorch_saver({'ac':ac.state_dict()})
@@ -338,21 +302,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def update(data):
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
-        cq_optimizer.zero_grad()
-        loss_q, loss_cq, q_info = compute_loss_q(data)
+        loss_q, q_info = compute_loss_q(data)
         loss_q.backward()
-        loss_cq.backward()
         q_optimizer.step()
-        cq_optimizer.step()
 
         # Record things
-        logger.store(LossQ=loss_q.item(), LossCQ=loss_cq.item(), **q_info)
+        logger.store(LossQ=loss_q.item(), **q_info)
 
         # Freeze Q-networks so you don't waste computational effort 
         # computing gradients for them during the policy learning step.
         for p in q_params:
-            p.requires_grad = False
-        for p in cq_params:
             p.requires_grad = False
 
         # Next run one gradient descent step for pi.
@@ -362,8 +321,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         pi_optimizer.step()
 
         for p in q_params:
-            p.requires_grad = True
-        for p in cq_params:
             p.requires_grad = True
 
         # Record things
@@ -431,14 +388,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # d = False if ep_len==max_ep_len else d
 
-        if ep_cost > died_when_unsafe:
-            d = True
-
         # Store experience to replay buffer
-        if c > 0.0:
-            replay_buffer.store(o, a, -c*cost_scale, (c - cost_bias)*cost_scale, o2, d) 
+        if mix_reward and c > 0.0:
+            replay_buffer.store(o, a, -c*cost_scale, o2, d) 
         else:
-            replay_buffer.store(o, a, r*reward_scale, (c - cost_bias)*cost_scale, o2, d) 
+            replay_buffer.store(o, a, r*reward_scale, o2, d) 
  
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
@@ -454,17 +408,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
-            # auto penalty
-            if auto_penalty:
-                print("ep_cost = {}".format(ep_cost))
-                for _ in range(50):
-                    log_penalty_optimizer.zero_grad()
-                    loss_log_penalty = compute_loss_log_penalty(ep_cost)
-                    loss_log_penalty.backward()
-                    log_penalty_optimizer.step()
-            penalty = log_penalty.exp().detach()
-            logger.store(penalty=penalty)
-
             logger.store(EpRet=ep_ret, EpCost=ep_cost_sparse, EpLen=ep_len)
             o, ep_ret, ep_cost, ep_cost_sparse, ep_len = env.reset(), 0, 0, 0, 0
 
@@ -497,14 +440,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', average_only=True)
             logger.log_tabular('Q2Vals', average_only=True)
-            logger.log_tabular('Q1ValsStd', average_only=True)
-            logger.log_tabular('Q2ValsStd', average_only=True)
+            logger.log_tabular('QValsStd', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('LossCQ', average_only=True)
             logger.log_tabular('mmd_entropy', average_only=True)
             logger.log_tabular('alpha', average_only=True)
-            logger.log_tabular('penalty', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
