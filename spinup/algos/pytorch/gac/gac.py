@@ -187,7 +187,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         p.requires_grad = False
         
     # List of parameters for both Q-networks (save this for convenience)
-    q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
+    q_params = itertools.chain(ac.q1.parameters())
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -224,7 +224,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = torch.FloatTensor(d).to(device)
 
         q1 = ac.q1(o, a)
-        q2 = ac.q2(o, a)
 
         # Bellman backup for Q functions
 
@@ -233,17 +232,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             a2 = ac.pi(o2)
             # Target Q-values
             q1_pi_targ = ac_targ.q1(o2, a2)
-            q2_pi_targ = ac_targ.q2(o2, a2)
-            backup = r + gamma * (1 - d) * torch.min(q1_pi_targ, q2_pi_targ)
+            backup = r + gamma * (1 - d) * q1_pi_targ
 
         # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q = ((q1 - backup)**2).mean()
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+        q_info = dict(QVals=q1.detach().cpu().numpy())
 
         return loss_q, q_info
 
@@ -254,9 +249,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         o2 = o.repeat(expand_batch, 1)
         a2 = ac.pi(o2)
-        q1_pi = ac.q1(o2, a2)
-        q2_pi = ac.q2(o2, a2)
-        q_pi = torch.min(q1_pi, q2_pi)
+        q_pi = ac.q1(o2, a2)
 
         a2 = a2.view(expand_batch, -1, a2.shape[-1]).transpose(0, 1)
         with torch.no_grad():
@@ -438,8 +431,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('EpLen', average_only=True)
             logger.log_tabular('TestEpLen', average_only=True)
             logger.log_tabular('TotalEnvInteracts', t)
-            logger.log_tabular('Q1Vals', average_only=True)
-            logger.log_tabular('Q2Vals', average_only=True)
+            logger.log_tabular('QVals', average_only=True)
             logger.log_tabular('QValsStd', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
