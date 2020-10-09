@@ -259,11 +259,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         q_pi_std = q_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean()/q_pi_std + alpha * mmd_entropy
+        loss_pi = (-q_pi.mean()/q_pi_std + alpha * mmd_entropy)/(1 + alpha)
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
-                       QValsStd = q_pi_std)
+                       QValsStd = q_pi_std, alpha=alpha)
 
         return loss_pi, pi_info
     
@@ -325,8 +325,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_log_alpha = compute_loss_log_alpha(pi_info["mmd_entropy"])
             loss_log_alpha.backward()
             log_alpha_optimizer.step()
+        nonlocal alpha
         alpha = log_alpha.exp().detach()
-        logger.store(alpha=alpha)
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
