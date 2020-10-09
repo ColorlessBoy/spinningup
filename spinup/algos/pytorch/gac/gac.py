@@ -279,13 +279,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def smooth_set(t_targ, t, polyak=0.0):
-        t_targ.mul_(polyak)
-        t_targ.add_((1 - polyak) * t)
+    def smooth_set(data, polyak=0.0):
+        data[0].mul_(polyak)
+        data[0].add_((1 - polyak) * data[1])
 
-    def smooth_update(model, model_targ, polyak=0.0):
-        for p, p_targ in zip(model.parameters(), model_targ.parameters()):
-            smooth_set(p_targ.data, p.data, polyak)
+    def smooth_update(models, polyak=0.0):
+        for p, p_targ in zip(models[0].parameters(), models[1].parameters()):
+            p_targ.mul_(polyak)
+            p_targ.add_((1 - polyak) * p)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
@@ -325,8 +326,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            smooth_update(ac.q1, ac_targ.q1, polyak)
-            smooth_update(ac.q2, ac_targ.q2, polyak)
+            smooth_update([ac.q1, ac_targ.q1], polyak)
+            smooth_update([ac.q2, ac_targ.q2], polyak)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -376,10 +377,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         with torch.no_grad():
             obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
             obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-            smooth_set(ac.obs_std.data, obs_std)
-            smooth_set(ac.obs_mean.data, obs_mean)
-            smooth_set(ac_targ.obs_std.data, obs_std)
-            smooth_set(ac_targ.obs_mean.data, obs_mean)
+            smooth_set([ac.obs_std.data, obs_std])
+            smooth_set([ac.obs_mean.data, obs_mean])
+            smooth_set([ac_targ.obs_std.data, obs_std])
+            smooth_set([ac_targ.obs_mean.data, obs_mean])
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
