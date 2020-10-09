@@ -259,7 +259,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         q_pi_std = q_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = (-q_pi.mean()/q_pi_std + alpha * mmd_entropy)/(1 + alpha)
+        loss_pi = (-q_pi.mean() + alpha * mmd_entropy)/(1 + alpha)
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
@@ -284,13 +284,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver({'ac':ac.state_dict()})
 
-    def smooth_set(t_targ, t, polyak=polyak):
+    def smooth_set(t_targ, t, polyak=0.0):
         t_targ.mul_(polyak)
         t_targ.add_((1 - polyak) * t)
 
-    def smooth_update(model, model_targ, polyak=polyak):
+    def smooth_update(model, model_targ, polyak=0.0):
         for p, p_targ in zip(model.parameters(), model_targ.parameters()):
-            smooth_set(p_targ.data, p.data)
+            smooth_set(p_targ.data, p.data, polyak)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
