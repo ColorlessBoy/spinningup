@@ -253,13 +253,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
-        q_pi_std = q_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = (-q_pi.mean()/q_pi_std + alpha * mmd_entropy)/(1 + alpha)
+        loss_pi = (-q_pi.mean() + alpha * mmd_entropy)/(1 + alpha)
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
-                       QValsStd = q_pi_std, alpha=alpha)
+                       alpha=alpha)
 
         return loss_pi, pi_info
     
@@ -418,7 +417,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', average_only=True)
             logger.log_tabular('Q2Vals', average_only=True)
-            logger.log_tabular('QValsStd', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('mmd_entropy', average_only=True)
