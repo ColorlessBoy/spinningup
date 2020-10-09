@@ -253,11 +253,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
+        q_pi_std = q_pi.std().detach() + 1e-8
         # Entropy-regularized policy loss
-        loss_pi = -q_pi.mean() + alpha * mmd_entropy
+        loss_pi = (-q_pi.mean()/q_pi_std + alpha * mmd_entropy)/(1 + alpha)
 
         # Useful info for logging
-        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
+                       QValsStd = q_pi_std, alpha=alpha)
 
         return loss_pi, pi_info
     
@@ -277,6 +279,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
+
+    def smooth_set(t_targ, t, polyak=0.0):
+        t_targ.mul_(polyak)
+        t_targ.add_((1 - polyak) * t)
+
+    def smooth_update(model, model_targ, polyak=0.0):
+        for p, p_targ in zip(model.parameters(), model_targ.parameters()):
+            smooth_set(p_targ.data, p.data, polyak)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
@@ -311,22 +321,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_log_alpha = compute_loss_log_alpha(pi_info["mmd_entropy"])
             loss_log_alpha.backward()
             log_alpha_optimizer.step()
+        nonlocal alpha
         alpha = log_alpha.exp().detach()
-        logger.store(alpha=alpha)
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak)
-                p_targ.data.add_((1 - polyak) * p.data)
-
-            for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_((1 - pi_lr))
-                p_targ.data.add_(pi_lr * p.data)
+            smooth_update(ac.q1, ac_targ.q1, polyak)
+            smooth_update(ac.q2, ac_targ.q2, polyak)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -372,10 +373,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r*reward_scale, o2, d)
-        ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
-        ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-        ac_targ.obs_std = ac.obs_std
-        ac_targ.obs_mean = ac.obs_mean
+
+        with torch.no_grad():
+            obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
+            obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
+            smooth_set(ac.obs_std.data, obs_std)
+            smooth_set(ac.obs_mean.data, obs_mean)
+            smooth_set(ac_targ.obs_std.data, obs_std)
+            smooth_set(ac_targ.obs_mean.data, obs_mean)
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
@@ -411,18 +416,19 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('EpLen', average_only=True)
             logger.log_tabular('TestEpLen', average_only=True)
             logger.log_tabular('TotalEnvInteracts', t)
-            logger.log_tabular('Q1Vals', with_min_and_max=True)
-            logger.log_tabular('Q2Vals', with_min_and_max=True)
+            logger.log_tabular('Q1Vals', average_only=True)
+            logger.log_tabular('Q2Vals', average_only=True)
+            logger.log_tabular('QValsStd', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('mmd_entropy', with_min_and_max=True)
-            logger.log_tabular('alpha', with_min_and_max=True)
+            logger.log_tabular('mmd_entropy', average_only=True)
+            logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
             # Normalize State
-            print("obs_mean=" + str(replay_buffer.obs_mean))
-            print("obs_std=" + str(replay_buffer.obs_std))
+            print("obs_mean=" + str(ac.obs_mean))
+            print("obs_std=" + str(ac.obs_std))
 
 if __name__ == '__main__':
     import argparse

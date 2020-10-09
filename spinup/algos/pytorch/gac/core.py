@@ -69,8 +69,8 @@ class MLPActorCritic(nn.Module):
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
-        self.obs_mean = torch.FloatTensor([0.0])
-        self.obs_std = torch.FloatTensor([0.0])
+        self.obs_mean = nn.Parameter(torch.zeros(obs_dim, dtype=torch.float32))
+        self.obs_std = nn.Parameter(torch.ones(obs_dim, dtype=torch.float32))
 
     def act(self, obs, deterministic=False, noise='gaussian', obs_limit=5.0):
         obs = ((obs - self.obs_mean.to(obs.device))/(self.obs_std.to(obs.device) + 1e-8)).clamp(-obs_limit, obs_limit)
