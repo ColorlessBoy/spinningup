@@ -254,7 +254,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
         # Entropy-regularized policy loss
-        loss_pi = (-q_pi.mean() + alpha * mmd_entropy)/(1 + alpha)
+        loss_pi = (-q_pi.mean() + alpha * mmd_entropy)
 
         # Useful info for logging
         pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(),
