@@ -59,11 +59,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, 
-        device='cuda', expand_batch=100, 
-        alpha=-1.0, beta=3.0,
-        warm_steps=0, reward_scale=1.0, 
-        kernel='energy', noise='gaussian'):
+        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
+        alpha=-1.0, beta=3.0, reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -253,6 +250,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
+        if alpha == 0.0:
+            mmd_entropy = mmd_entropy.detach()
+
         # Entropy-regularized policy loss
         loss_pi = (-q_pi.mean() + alpha * mmd_entropy)
 
@@ -278,15 +278,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
-
-    def smooth_set(data, polyak=0.0):
-        data[0].mul_(polyak)
-        data[0].add_((1 - polyak) * data[1])
-
-    def smooth_update(models, polyak=0.0):
-        for p, p_targ in zip(models[0].parameters(), models[1].parameters()):
-            p_targ.mul_(polyak)
-            p_targ.add_((1 - polyak) * p)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
@@ -326,8 +317,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
-            smooth_update([ac.q1, ac_targ.q1], polyak)
-            smooth_update([ac.q2, ac_targ.q2], polyak)
+            for p, p_targ in zip(ac.q1.parameters(), ac_targ.q1.parameters()):
+                p_targ.mul_(polyak)
+                p_targ.add_((1 - polyak) * p)
+            for p, p_targ in zip(ac.q2.parameters(), ac_targ.q2.parameters()):
+                p_targ.mul_(polyak)
+                p_targ.add_((1 - polyak) * p)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -356,7 +351,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
         if t <= start_steps:
-            a = env.action_space.sample()
+            a = env.action_space.sample() / act_limit
         else:
             a = get_action(o, deterministic=False)
 
@@ -374,13 +369,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Store experience to replay buffer
         replay_buffer.store(o, a, r*reward_scale, o2, d)
 
-        with torch.no_grad():
-            obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
-            obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-            smooth_set([ac.obs_std.data, obs_std])
-            smooth_set([ac.obs_mean.data, obs_mean])
-            smooth_set([ac_targ.obs_std.data, obs_std])
-            smooth_set([ac_targ.obs_mean.data, obs_mean])
+        ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
+        ac.obs_std  = torch.FloatTensor(replay_buffer.obs_std).to(device)
+        ac_targ.obs_mean = ac.obs_mean
+        ac_targ.obs_std  = ac.obs_std
 
         # Super critical, easy to overlook step: make sure to update 
         # most recent observation!
