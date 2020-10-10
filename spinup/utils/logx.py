@@ -258,7 +258,9 @@ class Logger:
             fpath = osp.join(self.output_dir, fpath)
             fname = 'model' + ('%d'%itr if itr is not None else '') + '.pt'
             fname = osp.join(fpath, fname)
-            os.makedirs(fpath, exist_ok=True)
+            if not osp.exists(fpath):
+                os.makedirs(fpath, exist_ok=True)
+
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 # We are using a non-recommended way of saving PyTorch models,
