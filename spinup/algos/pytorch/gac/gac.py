@@ -56,10 +56,10 @@ class ReplayBuffer:
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
-        polyak=0.995, pi_lr=1.0, lr=1e-3, batch_size=100, start_steps=10000, 
+        polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
-        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, alpha=0.0,
-        reward_scale=1.0, kernel='energy', noise='gaussian'):
+        logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
+        alpha=0.0, beta=0.0, reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -188,6 +188,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
+    auto_alpha = False
+    if alpha < 0.0:
+        auto_alpha = True
+        alpha = -alpha
+        log_alpha = torch.FloatTensor(np.log(alpha), requires_grad=True)
+
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
@@ -241,25 +247,37 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         mmd_entropy = core.mmd(a2, a3, kernel=kernel)
 
-        if alpha <= 0.0:
+        if alpha == 0.0:
             mmd_entropy.detach_()
 
         # Entropy-regularized policy loss
         loss_pi = -q_pi.mean() + alpha*mmd_entropy
 
         # Useful info for logging
-        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy())
+        pi_info = dict(mmd_entropy=mmd_entropy.detach().cpu().numpy(), alpha=alpha)
 
         return loss_pi, pi_info
+    
+    def compute_loss_log_alpha(mmd_entropy):
+        if log_alpha < -5.0:
+            loss_log_alpha = -log_alpha
+        elif log_alpha > 5.0:
+            loss_log_alpha = log_alpha
+        else:
+            loss_log_alpha = log_alpha * (beta - mmd_entropy)
+        return loss_log_alpha
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
+    if auto_alpha:
+        log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
     def update(data):
+        nonlocal alpha
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
         loss_q, q_info = compute_loss_q(data)
@@ -286,19 +304,21 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Record things
         logger.store(LossPi=loss_pi.item(), **pi_info)
 
+        if auto_alpha:
+            log_alpha_optimizer.zero_grad()
+            loss_log_alpha = compute_loss_log_alpha(pi_info['mmd_entropy'])
+            loss_log_alpha.backward()
+            log_alpha_optimizer.step()
+            alpha = log_alpha.exp().detach()
+
         # Finally, update target networks by polyak averaging.
         with torch.no_grad():
             for p, p_targ in zip(ac.parameters(), ac_targ.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(polyak)
                 p_targ.data.add_((1 - polyak) * p.data)
-
             for p, p_targ in zip(ac.pi.parameters(), ac_targ.pi.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_((1 - pi_lr))
-                p_targ.data.add_(pi_lr * p.data)
+                p_targ.data.mul_(polyak_pi)
+                p_targ.data.add_((1 - polyak_pi) * p.data)
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
@@ -389,6 +409,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
             logger.log_tabular('mmd_entropy', average_only=True)
+            logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
