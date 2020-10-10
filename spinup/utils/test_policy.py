@@ -97,6 +97,10 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
 
     model = torch.load(fname).to(device)
 
+    if 'gac' in fpath:
+        print("obs_mean=" + str(model.obs_mean))
+        print("obs_std =" + str(model.obs_std))
+
     # make function for producing an action given a single state
     def get_action(o):
         with torch.no_grad():
@@ -126,12 +130,6 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         o, r, d, _ = env.step(a)
         ep_ret += r
         ep_len += 1
-
-#       actions = []
-#       for _ in range(100):
-#           actions.append(str(get_action(o)))
-#       f.write('\n'.join(actions))
-#       f.write('\n')
 
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)

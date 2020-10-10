@@ -28,12 +28,11 @@ def count_vars(module):
 
 class GenerativeGaussianMLPActor(nn.Module):
 
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.epsilon_dim = act_dim * act_dim
         hidden_sizes[0] += self.epsilon_dim
         self.net = mlp([obs_dim+self.epsilon_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh())
-        self.act_limit = act_limit
         self.apply(_weight_init)
 
     def forward(self, obs, std=1.0, noise='gaussian', epsilon_limit=5.0):
@@ -42,7 +41,6 @@ class GenerativeGaussianMLPActor(nn.Module):
         else:
             epsilon = torch.rand(obs.shape[0], self.epsilon_dim, device=obs.device) * 2 - 1
         pi_action = self.net(torch.cat([obs, epsilon], dim=-1))
-        pi_action = self.act_limit * pi_action
         return pi_action
 
 class MLPQFunction(nn.Module):
@@ -65,10 +63,9 @@ class MLPActorCritic(nn.Module):
 
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
-        self.act_limit = action_space.high[0]
 
         # build policy and value functions
-        self.pi = GenerativeGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, self.act_limit)
+        self.pi = GenerativeGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation)
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 
