@@ -192,7 +192,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if alpha < 0.0:
         auto_alpha = True
         alpha = -alpha
-        log_alpha = torch.FloatTensor(np.log(alpha), requires_grad=True)
+        log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
