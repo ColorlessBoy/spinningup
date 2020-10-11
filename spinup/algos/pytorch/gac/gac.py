@@ -59,7 +59,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
-        alpha=0.0, beta=0.0, reward_scale=1.0, kernel='energy', noise='gaussian'):
+        alpha=0.0, beta_start=0.0, beta_step=0.0, beta_max=0.0,
+        reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
 
@@ -258,7 +259,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         return loss_pi, pi_info
     
-    def compute_loss_log_alpha(mmd_entropy):
+    def compute_loss_log_alpha(mmd_entropy, beta):
         if log_alpha < -5.0:
             loss_log_alpha = -log_alpha
         elif log_alpha > 5.0:
@@ -276,7 +277,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update(data):
+    def update(data, beta):
         nonlocal alpha
         # First run one gradient descent step for Q1 and Q2
         q_optimizer.zero_grad()
@@ -306,7 +307,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         if auto_alpha:
             log_alpha_optimizer.zero_grad()
-            loss_log_alpha = compute_loss_log_alpha(pi_info['mmd_entropy'])
+            loss_log_alpha = compute_loss_log_alpha(pi_info['mmd_entropy'], beta)
             loss_log_alpha.backward()
             log_alpha_optimizer.step()
             alpha = log_alpha.exp().detach()
@@ -382,9 +383,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
+            beta = beta_start + beta_step * epoch
+            beta = min(beta, beta_max)
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
-                update(batch)
+                update(batch, beta)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
