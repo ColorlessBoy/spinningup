@@ -118,7 +118,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
         "page on Experiment Outputs for how to handle this situation."
 
     logger = EpochLogger()
-    o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
+    o, r, d, ep_ret, ep_cost, ep_len, n = env.reset(), 0, False, 0, 0, 0, 0
 
 #   f = open('./action.txt', 'w')
     while n < num_episodes:
@@ -127,17 +127,19 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
             time.sleep(1e-3)
 
         a = get_action(o)
-        o, r, d, _ = env.step(a)
-        ep_ret += r
+        o, _, d, info = env.step(a)
+        ep_ret  += info.get('goal_met', 0.0)
+        ep_cost += info.get('cost', 0.0)
         ep_len += 1
 
         if d or (ep_len == max_ep_len):
-            logger.store(EpRet=ep_ret, EpLen=ep_len)
-            print('Episode %d \t EpRet %.3f \t EpLen %d'%(n, ep_ret, ep_len))
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            logger.store(EpRet=ep_ret, EpCost=ep_cost, EpLen=ep_len)
+            print('Episode %d \t EpRet %.3f \t EpCost %.3f \t EpLen %d'%(n, ep_ret, ep_cost, ep_len))
+            o, r, d, ep_ret, ep_cost, ep_len = env.reset(), 0, False, 0, 0, 0
             n += 1
 
     logger.log_tabular('EpRet', with_min_and_max=True)
+    logger.log_tabular('EpCost', with_min_and_max=True)
     logger.log_tabular('EpLen', average_only=True)
     logger.dump_tabular()
 
