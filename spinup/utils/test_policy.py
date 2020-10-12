@@ -110,7 +110,7 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
 
     return get_action
 
-def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
+def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, sleep_time=1e-3):
 
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
@@ -124,7 +124,7 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
     while n < num_episodes:
         if render:
             env.render()
-            time.sleep(1e-3)
+            time.sleep(sleep_time)
 
         a = get_action(o)
         o, _, d, info = env.step(a)
@@ -152,9 +152,10 @@ if __name__ == '__main__':
     parser.add_argument('--episodes', '-n', type=int, default=100)
     parser.add_argument('--norender', '-nr', action='store_true')
     parser.add_argument('--itr', '-i', type=int, default=-1)
+    parser.add_argument('--sleep-time', type=float, default=1e-3)
     parser.add_argument('--deterministic', '-d', action='store_true')
     args = parser.parse_args()
     env, get_action = load_policy_and_env(args.fpath, 
                                           args.itr if args.itr >=0 else 'last',
                                           args.deterministic)
-    run_policy(env, get_action, args.len, args.episodes, not(args.norender))
+    run_policy(env, get_action, args.len, args.episodes, not(args.norender), args.sleep_time)
