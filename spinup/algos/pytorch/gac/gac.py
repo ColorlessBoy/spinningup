@@ -356,7 +356,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
-        if model_file is None and t <= start_steps:
+        if t <= start_steps:
             a = env.action_space.sample() / act_limit
         else:
             a = get_action(o, deterministic=False)
