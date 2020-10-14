@@ -62,8 +62,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
-        alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=1.0, mix_reward=False,
-        kernel='energy', noise='gaussian', model_file=None):
+        alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
+        kernel='energy', noise='gaussian', model_file=None, save_each_model=False):
     """
     Generative Actor-Critic (GAC)
 
@@ -175,7 +175,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_limit = env.action_space.high[0]
 
     # Create actor-critic module and target networks
-    if 'pt' in model_file:
+    if model_file:
         ac = torch.load(model_file).to(device)
     else:
         ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
@@ -190,7 +190,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
-    if 'pt' in model_file:
+    if model_file:
         replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
         replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
         replay_buffer.obs_normalization = False
@@ -361,9 +361,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
-        if 'pt' in model_file:
-            a = get_action(o, deterministic=False)
-        elif t <= start_steps:
+        if model_file is None and t <= start_steps:
             a = env.action_space.sample() / act_limit
         else:
             a = get_action(o, deterministic=False)
@@ -414,7 +412,10 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs):
-                logger.save_state({'env': env}, t+1)
+                if save_each_model:
+                    logger.save_state({'env': env}, t+1)
+                else:
+                    logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
             test_agent()
