@@ -28,6 +28,7 @@ class ReplayBuffer:
         self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
+        self.obs_normalization = True
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -38,10 +39,11 @@ class ReplayBuffer:
         self.ptr = (self.ptr+1) % self.max_size
         self.size = min(self.size+1, self.max_size)
 
-        self.total_num += 1
-        self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
-        self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
-        self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+        if self.obs_normalization:
+            self.total_num += 1
+            self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + np.array(obs) / self.total_num
+            self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + np.array(obs)**2 / self.total_num
+            self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
@@ -173,7 +175,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     act_limit = env.action_space.high[0]
 
     # Create actor-critic module and target networks
-    if model_file:
+    if 'pt' in model_file:
         ac = torch.load(model_file).to(device)
     else:
         ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
@@ -188,9 +190,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
-    if model_file:
+    if 'pt' in model_file:
         replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
         replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
+        replay_buffer.obs_normalization = False
+        print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
+        print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -356,7 +361,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
-        if t <= start_steps:
+        if 'pt' in model_file:
+            a = get_action(o, deterministic=False)
+        elif t <= start_steps:
             a = env.action_space.sample() / act_limit
         else:
             a = get_action(o, deterministic=False)
