@@ -151,7 +151,28 @@ class ReplayBuffer:
         batch = dict(obs=self.obs_encoder(self.obs_buf[epoch_idxs, step_idxs]),
                      g=self.g_encoder(self.g_buf[epoch_idxs, step_idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[epoch_idxs, step_idxs]),
-                     g2=self.obs_encoder(self.g2_buf[epoch_idxs, step_idxs]),
+                     g2=self.g_encoder(self.g2_buf[epoch_idxs, step_idxs]),
+                     act=self.act_buf[epoch_idxs, step_idxs],
+                     rew=self.rew_buf[epoch_idxs, step_idxs],
+                     done=self.done_buf[epoch_idxs, step_idxs])
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
+    
+    def hindsight_sample_batch(self, batch_size=256, future=0.75):
+        epoch_idxs = np.random.randint(0, self.epoch, size=batch_size)
+        step_idxs  = np.random.randint(0, self.max_steps, size=batch_size)
+
+        her_indexes = np.where(np.random.uniform(size=batch_size) < future)
+        future_offset = np.random.uniform(size=batch_size) * (self.max_steps - step_idxs)
+        future_offset = future_offset.astype(int)
+        future_t = (step_idxs + 1 + future_offset)[her_indexes]
+        future_g = self.g_buf[epoch_idxs[her_indexes], future_t]
+        g2 = self.g2_buf[epoch_idxs, step_idxs]
+        g2[her_indexes] = future_g
+
+        batch = dict(obs=self.obs_encoder(self.obs_buf[epoch_idxs, step_idxs]),
+                     g=self.g_encoder(self.g_buf[epoch_idxs, step_idxs]),
+                     obs2=self.obs_encoder(self.obs2_buf[epoch_idxs, step_idxs]),
+                     g2=self.g_encoder(g2),
                      act=self.act_buf[epoch_idxs, step_idxs],
                      rew=self.rew_buf[epoch_idxs, step_idxs],
                      done=self.done_buf[epoch_idxs, step_idxs])
