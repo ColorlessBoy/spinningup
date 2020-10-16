@@ -40,7 +40,6 @@ class ReplayBuffer:
         self.size = min(self.size+1, self.max_size)
 
         if self.obs_normalization:
-            obs = np.array(obs).clip(-200, 200)
             self.total_num += 1
             self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + obs / self.total_num
             self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + obs**2 / self.total_num
@@ -56,7 +55,7 @@ class ReplayBuffer:
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
-        return ((np.array(o).clip(-200, 200) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+        return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
