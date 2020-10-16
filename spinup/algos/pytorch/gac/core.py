@@ -81,6 +81,89 @@ class MLPActorCritic(nn.Module):
                 a = self.pi(obs, noise=noise)
         return a.detach().cpu().numpy()[0]
 
+# Replay Buffer
+
+class ReplayBuffer:
+    """
+    A simple FIFO experience replay buffer for SAC agents.
+    """
+
+    def __init__(self, obs_dim, act_dim, max_epochs=1000, max_steps=1000, goal_dim=1, obs_limit=5.0):
+        self.max_epochs = max_epochs
+        self.max_steps  = max_steps
+
+        self.obs_buf  = np.zeros((self.max_epochs, self.max_steps, obs_dim), dtype=np.float32)
+        self.g_buf    = np.zeros((self.max_epochs, self.max_steps, goal_dim), dtype=np.float32)
+        self.obs2_buf = np.zeros((self.max_epochs, self.max_steps, obs_dim), dtype=np.float32)
+        self.g2_buf   = np.zeros((self.max_epochs, self.max_steps, goal_dim), dtype=np.float32)
+        self.act_buf  = np.zeros((self.max_epochs, self.max_steps, act_dim), dtype=np.float32)
+        self.rew_buf  = np.zeros((self.max_epochs, self.max_steps), dtype=np.float32)
+        self.cost_buf = np.zeros((self.max_epochs, self.max_steps), dtype=np.float32)
+        self.done_buf = np.zeros((self.max_epochs, self.max_steps), dtype=np.float32)
+
+        self.epoch_ptr, self.step_ptr, self.epoch = 0, 0, 0
+
+        # For state normalization.
+        self.total_num = 0
+        self.obs_limit = 5.0
+        self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
+        self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
+        self.obs_std = np.ones(obs_dim, dtype=np.float32)
+        self.obs_normalization = True
+
+
+        self.g_limit = 5.0
+        self.g_mean = np.zeros(goal_dim, dtype=np.float32)
+        self.g_square_mean = np.zeros(goal_dim, dtype=np.float32)
+        self.g_std = np.ones(goal_dim, dtype=np.float32)
+
+    def store(self, obs, act, rew, next_obs, done, cost=0, goal=0, next_goal=0):
+        self.obs_buf[self.epoch_ptr][self.step_ptr] = obs
+        self.g_buf[self.epoch_ptr][self.step_ptr] = goal
+        self.obs2_buf[self.epoch_ptr][self.step_ptr] = next_obs
+        self.g2_buf[self.epoch_ptr][self.step_ptr] = next_goal
+        self.act_buf[self.epoch_ptr][self.step_ptr] = act
+        self.rew_buf[self.epoch_ptr][self.step_ptr] = rew
+        self.cost_buf[self.epoch_ptr][self.step_ptr] = cost
+        self.done_buf[self.epoch_ptr][self.step_ptr] = done
+
+        self.step_ptr += 1
+        if self.step_ptr >= self.max_steps:
+            self.step_ptr = 0
+            self.epoch_ptr = (self.epoch_ptr + 1) % self.max_epochs
+            self.epoch = min(self.epoch + 1, self.max_epochs)
+            print("ReplayBuffer.epoch = {}".format(self.epoch))
+
+        if self.obs_normalization:
+            self.total_num += 1
+
+            self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + obs / self.total_num
+            self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + obs**2 / self.total_num
+            self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+
+            self.g_mean = self.g_mean / self.total_num * (self.total_num - 1) + goal / self.total_num
+            self.g_square_mean = self.g_square_mean / self.total_num * (self.total_num - 1) + goal**2 / self.total_num
+            self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
+
+    def sample_batch(self, batch_size=256):
+        epoch_idxs = np.random.randint(0, self.epoch, size=batch_size)
+        step_idxs  = np.random.randint(0, self.max_steps, size=batch_size)
+        batch = dict(obs=self.obs_encoder(self.obs_buf[epoch_idxs, step_idxs]),
+                     g=self.g_encoder(self.g_buf[epoch_idxs, step_idxs]),
+                     obs2=self.obs_encoder(self.obs2_buf[epoch_idxs, step_idxs]),
+                     g2=self.obs_encoder(self.g2_buf[epoch_idxs, step_idxs]),
+                     act=self.act_buf[epoch_idxs, step_idxs],
+                     rew=self.rew_buf[epoch_idxs, step_idxs],
+                     done=self.done_buf[epoch_idxs, step_idxs])
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
+    
+    def obs_encoder(self, o):
+        return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+    
+    def g_encoder(self, g):
+        return ((np.array(g) - self.g_mean)/(self.g_std + 1e-8)).clip(-self.g_limit, self.g_limit)
+
+
 # Maximum Mean Discrepancy
 # geomloss: https://github.com/jeanfeydy/geomloss
 

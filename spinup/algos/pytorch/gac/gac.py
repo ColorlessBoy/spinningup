@@ -9,60 +9,13 @@ import time
 import spinup.algos.pytorch.gac.core as core
 from spinup.utils.logx import EpochLogger
 
-
-class ReplayBuffer:
-    """
-    A simple FIFO experience replay buffer for SAC agents.
-    """
-
-    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.done_buf = np.zeros(size, dtype=np.float32)
-        self.ptr, self.size, self.max_size = 0, 0, size
-        # For state normalization.
-        self.total_num = 0
-        self.obs_limit = 5.0
-        self.obs_mean = np.zeros(obs_dim, dtype=np.float32)
-        self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
-        self.obs_std = np.zeros(obs_dim, dtype=np.float32)
-        self.obs_normalization = True
-
-    def store(self, obs, act, rew, next_obs, done):
-        self.obs_buf[self.ptr] = obs
-        self.obs2_buf[self.ptr] = next_obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = rew
-        self.done_buf[self.ptr] = done
-        self.ptr = (self.ptr+1) % self.max_size
-        self.size = min(self.size+1, self.max_size)
-
-        if self.obs_normalization:
-            self.total_num += 1
-            self.obs_mean = self.obs_mean / self.total_num * (self.total_num - 1) + obs / self.total_num
-            self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + obs**2 / self.total_num
-            self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
-
-    def sample_batch(self, batch_size=32):
-        idxs = np.random.randint(0, self.size, size=batch_size)
-        batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
-                     obs2=self.obs_encoder(self.obs2_buf[idxs]),
-                     act=self.act_buf[idxs],
-                     rew=self.rew_buf[idxs],
-                     done=self.done_buf[idxs])
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
-    
-    def obs_encoder(self, o):
-        return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
-
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
-        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
+        update_after=10000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
-        alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
+        alpha=0.0, beta_start=0.0, beta_step=0.0, beta_max=0.0,
+        reward_scale=1.0, cost_scale=0.0, mix_reward=False,
         kernel='energy', noise='gaussian', model_file=None, save_each_model=False):
     """
     Generative Actor-Critic (GAC)
@@ -167,7 +120,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
@@ -189,7 +142,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, 
+        max_epochs=int(replay_size/max_ep_len), max_steps=max_ep_len)
+
     if model_file:
         replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
         replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
@@ -409,8 +364,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 update(batch, beta)
 
         # End of epoch handling
-        if (t+1) % steps_per_epoch == 0:
-            epoch = (t+1) // steps_per_epoch
+        if t >= update_after and (t+1) % steps_per_epoch == 0:
+            epoch = (t - update_after + 1) // steps_per_epoch
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs):
