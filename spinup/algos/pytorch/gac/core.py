@@ -166,11 +166,14 @@ class ReplayBuffer:
         future_offset = future_offset.astype(int)
         future_t = (step_idxs + 1 + future_offset)[her_indexes]
         future_g = self.g_buf[epoch_idxs[her_indexes], future_t]
+
+        g  = self.g_buf[epoch_idxs, step_idxs]
+        g[her_indexes] -= future_g  # relative goal
         g2 = self.g2_buf[epoch_idxs, step_idxs]
-        g2[her_indexes] = future_g
+        g2[her_indexes] -= future_g # relative goal
 
         batch = dict(obs=self.obs_encoder(self.obs_buf[epoch_idxs, step_idxs]),
-                     g=self.g_encoder(self.g_buf[epoch_idxs, step_idxs]),
+                     g=self.g_encoder(g),
                      obs2=self.obs_encoder(self.obs2_buf[epoch_idxs, step_idxs]),
                      g2=self.g_encoder(g2),
                      act=self.act_buf[epoch_idxs, step_idxs],
