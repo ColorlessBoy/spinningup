@@ -60,7 +60,7 @@ class ReplayBuffer:
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
         polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
-        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
+        update_after=10000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
         alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
         kernel='energy', noise='gaussian', model_file=None, save_each_model=False):
@@ -409,7 +409,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 update(batch)
 
         # End of epoch handling
-        if (t+1) % steps_per_epoch == 0:
+        if t >= update_after and (t+1) % steps_per_epoch == 0:
             epoch = (t+1) // steps_per_epoch
 
             # Save model
