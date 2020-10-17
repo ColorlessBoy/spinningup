@@ -376,8 +376,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if model_file or t > start_steps:
             a, a_controller = get_action(o, deterministic=False)
         else:
-            a = 2 * o[goal_offset:goal_offset+goal_dim] - 1.0
+            a = 2 * np.random.rand(goal_dim) - 1.0
             o_controller = o
+            o_controller[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
             o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
             a_controller = ac_controller.act(o_controller, deterministic=False, noise=noise)
 
