@@ -63,7 +63,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
         alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
-        kernel='energy', noise='gaussian', model_file=None, save_each_model=False):
+        kernel='energy', noise='gaussian', model_file=None, save_each_model=False,
+        planner_file=None):
     """
     Generative Actor-Critic (GAC)
 
@@ -167,11 +168,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     goal_dim = env.goal_dim
     goal_offset = env.goal_offset
-    print("obs_dim = {}, goal_dim = {}, act_dim = {}".format(obs_dim, goal_dim, act_dim))
+    print("obs_dim = {}, goal_dim = {}, goal_offset={}, act_dim = {}".format(obs_dim, goal_dim, goal_offset, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
@@ -180,7 +181,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if model_file:
         ac = torch.load(model_file).to(device)
     else:
-        ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
+        ac = actor_critic(obs_dim, goal_dim, **ac_kwargs).to(device)
+
+    ac_planner = torch.load(planner_file).to(device)
+    ac.obs_mean = ac_planner.obs_mean
+    ac.obs_std  = ac_planner.obs_std
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -191,13 +196,13 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
-    if model_file:
-        replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
-        replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
-        replay_buffer.obs_normalization = False
-        print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
-        print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=goal_dim, size=replay_size)
+
+    replay_buffer.obs_mean = ac_planner.obs_mean.detach().cpu().numpy()
+    replay_buffer.obs_std  = ac_planner.obs_std.detach().cpu().numpy()
+    replay_buffer.obs_normalization = False
+    print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
+    print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -336,17 +341,24 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_((1 - polyak_pi) * p.data)
 
     def get_action(o, deterministic=False):
-        # o = replay_buffer.obs_encoder(o)
+        o_planner = o
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
-        return a
+        # a is in [-1, 1], but goal_feature in env is [0, 1]
+
+        o_planner[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
+        o_planner = torch.FloatTensor(o_planner.reshape(1, -1)).to(device)
+        a_planner = ac_planner.act(o_planner, deterministic, noise=noise)
+
+        return a, a_planner
 
     def test_agent():
         for j in range(num_test_episodes):
             o, d, ep_ret, ep_cost, ep_len = test_env.reset(), False, 0, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                o, r, d, info = test_env.step(get_action(o, True) * act_limit)
+                _, a_planner = get_action(o, False)
+                o, r, d, info = test_env.step(a_planner * act_limit)
                 ep_ret += info.get('goal_met', 0.0)
                 ep_cost += info.get('cost', 0.0)
                 ep_len += 1
@@ -364,12 +376,16 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
         if model_file or t > start_steps:
-            a = get_action(o, deterministic=False)
+            a, a_planner = get_action(o, deterministic=False)
         else:
-            a = env.action_space.sample() / act_limit
+            a = 2 * np.random.rand(goal_dim) - 1.0
+            o_planner = o
+            o_planner[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
+            o_planner = torch.FloatTensor(o_planner.reshape(1, -1)).to(device)
+            a_planner = ac_planner.act(o_planner, deterministic=False, noise=noise)
 
         # Step the env
-        o2, r, d, info = env.step(a * act_limit)
+        o2, r, d, info = env.step(a_planner * act_limit)
         c = info.get('cost', 0.0)
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
@@ -439,9 +455,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
-
-            print("obs_mean = " + str(ac.obs_mean))
-            print("obs_std  = " + str(ac.obs_std))
 
 if __name__ == '__main__':
     import argparse
