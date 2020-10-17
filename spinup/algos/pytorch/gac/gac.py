@@ -64,7 +64,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
         alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
         kernel='energy', noise='gaussian', model_file=None, save_each_model=False,
-        planner_file=None):
+        controller_file=None):
     """
     Generative Actor-Critic (GAC)
 
@@ -184,7 +184,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         ac = actor_critic(obs_dim, goal_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
-    ac_planner = torch.load(planner_file).to(device)
+    ac_controller = torch.load(controller_file).to(device)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
@@ -196,8 +196,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=goal_dim, size=replay_size)
     if model_file:
-        replay_buffer.obs_mean = ac_planner.obs_mean.detach().cpu().numpy()
-        replay_buffer.obs_std  = ac_planner.obs_std.detach().cpu().numpy()
+        replay_buffer.obs_mean = ac_controller.obs_mean.detach().cpu().numpy()
+        replay_buffer.obs_std  = ac_controller.obs_std.detach().cpu().numpy()
         print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
         print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
         replay_buffer.obs_normalization = False
@@ -339,24 +339,24 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_((1 - polyak_pi) * p.data)
 
     def get_action(o, deterministic=False):
-        o_planner = o
+        o_controller = o
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
         # a is in [-1, 1], but goal_feature in env is [0, 1]
 
-        o_planner[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
-        o_planner = torch.FloatTensor(o_planner.reshape(1, -1)).to(device)
-        a_planner = ac_planner.act(o_planner, deterministic, noise=noise)
+        o_controller[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
+        o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
+        a_controller = ac_controller.act(o_controller, deterministic, noise=noise)
 
-        return a, a_planner
+        return a, a_controller
 
     def test_agent():
         for j in range(num_test_episodes):
             o, d, ep_ret, ep_cost, ep_len = test_env.reset(), False, 0, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                _, a_planner = get_action(o, False)
-                o, r, d, info = test_env.step(a_planner * act_limit)
+                _, a_controller = get_action(o, False)
+                o, r, d, info = test_env.step(a_controller * act_limit)
                 ep_ret += info.get('goal_met', 0.0)
                 ep_cost += info.get('cost', 0.0)
                 ep_len += 1
@@ -374,15 +374,15 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
         if model_file or t > start_steps:
-            a, a_planner = get_action(o, deterministic=False)
+            a, a_controller = get_action(o, deterministic=False)
         else:
             a = 2 * o[goal_offset:goal_offset+goal_dim] - 1.0
-            o_planner = o
-            o_planner = torch.FloatTensor(o_planner.reshape(1, -1)).to(device)
-            a_planner = ac_planner.act(o_planner, deterministic=False, noise=noise)
+            o_controller = o
+            o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
+            a_controller = ac_controller.act(o_controller, deterministic=False, noise=noise)
 
         # Step the env
-        o2, r, d, info = env.step(a_planner * act_limit)
+        o2, r, d, info = env.step(a_controller * act_limit)
         c = info.get('cost', 0.0)
         ep_ret += info.get('goal_met', 0.0)
         ep_cost += c
