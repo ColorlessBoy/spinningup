@@ -169,7 +169,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
-    print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
+    goal_dim = env.goal_dim
+    print("obs_dim = {}, goal_dim = {}, act_dim = {}".format(obs_dim, goal_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
