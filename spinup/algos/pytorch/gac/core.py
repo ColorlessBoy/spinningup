@@ -144,8 +144,9 @@ class ReplayBuffer:
             self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + obs**2 / self.total_num
             self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
-            self.g_mean = self.g_mean / self.total_num * (self.total_num - 1) + achieved_goal / self.total_num
-            self.g_square_mean = self.g_square_mean / self.total_num * (self.total_num - 1) + achieved_goal**2 / self.total_num
+            g = target_goal - achieved_goal
+            self.g_mean = self.g_mean / self.total_num * (self.total_num - 1) + g / self.total_num
+            self.g_square_mean = self.g_square_mean / self.total_num * (self.total_num - 1) + g**2 / self.total_num
             self.g_std = np.sqrt(self.g_square_mean - self.g_mean ** 2 + 1e-8)
 
     def sample_batch(self, batch_size=256):
