@@ -169,19 +169,20 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     test_env.seed(seed)
 
     obs_dim = env.observation_space.shape[0]
-    act_dim = env.action_space.shape[0]
+    act_dim = env.math_goal_dim
     goal_dim = env.goal_dim
     goal_offset = env.goal_offset
-    print("obs_dim = {}, goal_dim = {}, goal_offset={}, act_dim = {}".format(obs_dim, goal_dim, goal_offset, act_dim))
+    print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
-    act_limit = env.action_space.high[0]
+    # act_limit = env.action_space.high[0]
+    act_limit = 2.0
 
     # Create actor-critic module and target networks
     if model_file:
         ac = torch.load(model_file).to(device)
     else:
-        ac = actor_critic(obs_dim, goal_dim, **ac_kwargs).to(device)
+        ac = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
     ac_controller = torch.load(controller_file).to(device)
@@ -194,7 +195,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=goal_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
     if model_file:
         replay_buffer.obs_mean = ac_controller.obs_mean.detach().cpu().numpy()
         replay_buffer.obs_std  = ac_controller.obs_std.detach().cpu().numpy()
@@ -342,9 +343,19 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         o_controller = o
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
-        # a is in [-1, 1], but goal_feature in env is [0, 1]
 
-        o_controller[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
+        goal_feature = env.get_goal_feature(a)
+        o_controller[goal_offset:goal_offset+goal_dim] = goal_feature
+        o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
+        a_controller = ac_controller.act(o_controller, deterministic, noise=noise)
+
+        return a, a_controller
+    
+    def get_random_action(o, deterministic=False):
+        o_controller = o
+        a = 2 * np.random.rand(act_dim) - 1
+        goal_feature = env.get_goal_feature(a)
+        o_controller[goal_offset:goal_offset+goal_dim] = goal_feature
         o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
         a_controller = ac_controller.act(o_controller, deterministic, noise=noise)
 
@@ -376,11 +387,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if model_file or t > start_steps:
             a, a_controller = get_action(o, deterministic=False)
         else:
-            a = 2 * np.random.rand(goal_dim) - 1.0
-            o_controller = o
-            o_controller[goal_offset:goal_offset+goal_dim] = (a + 1.0) / 2.0
-            o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
-            a_controller = ac_controller.act(o_controller, deterministic=False, noise=noise)
+            a, a_controller = get_random_action(o, deterministic=False)
 
         # Step the env
         o2, r, d, info = env.step(a_controller * act_limit)
