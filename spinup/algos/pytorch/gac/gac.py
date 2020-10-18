@@ -167,7 +167,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0] + env.goal_dim
     act_dim = env.action_space.shape[0]
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
@@ -178,7 +178,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if model_file:
         ac = torch.load(model_file).to(device)
     else:
-        ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
+        ac = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
