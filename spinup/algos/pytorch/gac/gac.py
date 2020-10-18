@@ -122,7 +122,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
-    print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
+    goal_dim = env.goal_dim
+    print("obs_dim = {}, goal_dim = {}, act_dim = {}".format(obs_dim, goal_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
@@ -131,7 +132,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if model_file:
         ac = torch.load(model_file).to(device)
     else:
-        ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
+        ac = actor_critic(obs_dim+goal_dim, act_dim, **ac_kwargs).to(device)
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -143,14 +144,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, 
-        max_epochs=int(replay_size/max_ep_len), max_steps=max_ep_len)
+        max_epochs=int(replay_size/max_ep_len), max_steps=max_ep_len, goal_dim=goal_dim)
 
-    if model_file:
-        replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
-        replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
-        replay_buffer.obs_normalization = False
-        print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
-        print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
+    # if model_file:
+    #     replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
+    #     replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
+    #     replay_buffer.obs_normalization = False
+    #     print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
+    #     print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
@@ -290,6 +291,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def get_action(o, deterministic=False):
         # o = replay_buffer.obs_encoder(o)
+        ag = o['achieved_goal']
+        tg = o['target_goal']
+        o = np.append(o['observation'], tg - ag)
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
         return a
@@ -336,13 +340,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Store experience to replay buffer
         if mix_reward and c > 0.0:
-            replay_buffer.store(o, a, -c * cost_scale, o2, d)
+            replay_buffer.store(o['observation'], a, -c * cost_scale, o2['observation'], d, 
+                achieved_goal=o['achieved_goal'], target_goal=o['target_goal'])
         else:
-            replay_buffer.store(o, a, r * reward_scale, o2, d)
+            replay_buffer.store(o['observation'], a, r * reward_scale, o2['observation'], d,
+                achieved_goal=o['achieved_goal'], target_goal=o['target_goal'])
 
-        ac.obs_std = torch.FloatTensor(replay_buffer.obs_std).to(device)
-        ac.obs_mean = torch.FloatTensor(replay_buffer.obs_mean).to(device)
-        ac_targ.obs_std = ac.obs_std
+        obs_std  = np.concatenate((replay_buffer.obs_std, replay_buffer.g_std), axis=-1)
+        obs_mean = np.concatenate((replay_buffer.obs_mean, replay_buffer.g_mean), axis=-1)
+        ac.obs_std  = torch.FloatTensor(obs_std).to(device)
+        ac.obs_mean = torch.FloatTensor(obs_mean).to(device)
+        ac_targ.obs_std  = ac.obs_std
         ac_targ.obs_mean = ac.obs_mean
 
         # Super critical, easy to overlook step: make sure to update 
