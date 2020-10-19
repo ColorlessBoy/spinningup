@@ -122,12 +122,12 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
 
 #   f = open('./action.txt', 'w')
     while n < num_episodes:
-        if render:
-            env.render()
-            time.sleep(sleep_time)
+#       if render:
+#           env.render()
+#           time.sleep(sleep_time)
 
         a = get_action(o)
-        o, _, d, info = env.step(a)
+        o, _, d, info = env.step(a, render, sleep_time)
         ep_ret  += info.get('goal_met', 0.0)
         ep_cost += info.get('cost', 0.0)
         ep_len += 1

@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
+import time
+
 def _weight_init(module):
     if isinstance(module, nn.Linear):
         torch.nn.init.xavier_normal_(module.weight, gain=0.01)
@@ -147,11 +149,15 @@ class PlanEnv:
         self.obs = self.env.reset()
         return self.obs
     
-    def step(self, action):
+    def step(self, action, render=False, sleep_time=1e-3):
         r, d, info = 0, 0, {}
         info['cost'] = 0.0
         info['goal_met'] = 0.0
         for _ in range(self.each_control_steps):
+            if render:
+                self.env.render()
+                time.sleep(sleep_time)
+
             self.obs, control_r, control_d, control_info = \
                 self.env.step(self._get_control_action(action))
             r += control_r
@@ -165,6 +171,9 @@ class PlanEnv:
     
     def seed(self, s):
         self.env.seed(s)
+
+    def render(self):
+        self.env.render()
 
     def _get_control_action(self, action):
         o = self.obs
