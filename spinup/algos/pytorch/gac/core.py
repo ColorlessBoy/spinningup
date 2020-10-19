@@ -125,6 +125,54 @@ class ReplayBuffer:
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
 
+class PlanEnv:
+    def __init__(self, env, controller_model, device, each_control_steps=1):
+        self.env = env
+        self.controller = torch.load(controller_model).to(device)
+        self.each_control_steps = each_control_steps
+        self.device = device
+
+        self.obs_dim = env.observation_space.shape[0]
+        self.act_dim = 2
+        self.act_limit = 2.0
+        self.control_act_limit = env.action_space.high[0]
+
+        self.obs = None
+        
+        # set by hand.
+        self.goal_offset = 3
+        self.goal_dim = 16
+    
+    def reset(self):
+        self.obs = self.env.reset()
+        return self.obs
+    
+    def step(self, action):
+        r, d, info = 0, 0, {}
+        info['cost'] = 0.0
+        info['goal_met'] = 0.0
+        for _ in range(self.each_control_steps):
+            self.obs, control_r, control_d, control_info = \
+                self.env.step(self._get_control_action(action))
+            r += control_r
+            info['cost'] += control_info.get('cost', 0.0)
+            info['goal_met'] += control_info.get('goal_met', 0.0)
+            if control_d: break
+        return self.obs, r, control_d, info
+    
+    def sample(self):
+        return (2 * np.random.rand(self.act_dim) - 1) * self.act_limit
+    
+    def seed(self, s):
+        self.env.seed(s)
+
+    def _get_control_action(self, action):
+        o = self.obs
+        o[self.goal_offset:self.goal_offset+self.goal_dim] = \
+            self.env.get_goal_feature(action)
+        o = torch.FloatTensor(o.reshape(1, -1)).to(self.device)
+        control_action = self.controller.act(o)
+        return control_action * self.control_act_limit
 
 # Maximum Mean Discrepancy
 # geomloss: https://github.com/jeanfeydy/geomloss

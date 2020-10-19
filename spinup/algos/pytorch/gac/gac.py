@@ -16,7 +16,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update_after=10000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
         alpha=0.0, beta=0.0, reward_scale=1.0, cost_scale=0.0, mix_reward=False,
-        kernel='energy', noise='gaussian', model_file=None, save_each_model=False):
+        kernel='energy', noise='gaussian', model_file=None, save_each_model=False,
+        controller_model=None, each_control_steps=1):
     """
     Generative Actor-Critic (GAC)
 
@@ -114,18 +115,23 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     env, test_env = env_fn(), env_fn()
 
+    env = core.PlanEnv(env, controller_model, device, 
+                        each_control_steps=each_control_steps)
+    test_env = core.PlanEnv(test_env, controller_model, device, 
+                        each_control_steps=each_control_steps)
+
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape[0]
-    act_dim = env.action_space.shape[0]
+    obs_dim = env.obs_dim
+    act_dim = env.act_dim
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
-    act_limit = env.action_space.high[0]
+    act_limit = env.act_limit
 
     # Create actor-critic module and target networks
     if model_file:
@@ -317,7 +323,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if model_file or t > start_steps:
             a = get_action(o, deterministic=False)
         else:
-            a = env.action_space.sample() / act_limit
+            a = env.sample() / act_limit
 
         # Step the env
         o2, r, d, info = env.step(a * act_limit)
