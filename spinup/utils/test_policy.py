@@ -101,12 +101,31 @@ def load_pytorch_policy(fpath, itr, deterministic=False):
         print("obs_mean=" + str(model.obs_mean))
         print("obs_std =" + str(model.obs_std))
 
-    # make function for producing an action given a single state
+#   # make function for producing an action given a single state
+#   def get_action(o):
+#       with torch.no_grad():
+#           o = torch.FloatTensor(o.reshape(1, -1)).to(device)
+#           action = model.act(o, deterministic)
+#       return action
+
+    controller_model = "safety-results/gac/PointGoal1-gac/PointGoal1-gac_s123/pyt_save/model6800000.pt"
+    ac_controller = torch.load(controller_model).to(device)
+    goal_limit = 2.0
+    goal_offset = 3
+    goal_dim = 16
+
     def get_action(o):
-        with torch.no_grad():
-            o = torch.FloatTensor(o.reshape(1, -1)).to(device)
-            action = model.act(o, deterministic)
-        return action
+        o_controller = o
+        o = torch.FloatTensor(o.reshape(1, -1)).to(device)
+        a = model.act(o)
+
+        # a2 = a / np.linalg.norm(a) * goal_limit
+        goal_feature = env.get_goal_feature(a * goal_limit)
+        o_controller[goal_offset:goal_offset+goal_dim] = goal_feature
+        o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
+        a_controller = ac_controller.act(o_controller)
+
+        return a_controller
 
     return get_action
 

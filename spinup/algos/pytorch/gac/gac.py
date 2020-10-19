@@ -175,8 +175,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
-    # act_limit = env.action_space.high[0]
-    act_limit = 2.0
+    act_limit = env.action_space.high[0]
+
+    goal_limit = 2.0
 
     # Create actor-critic module and target networks
     if model_file:
@@ -344,7 +345,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         o = torch.FloatTensor(o.reshape(1, -1)).to(device)
         a = ac_targ.act(o, deterministic, noise=noise)
 
-        goal_feature = env.get_goal_feature(a)
+        # a2 = a / np.linalg.norm(a) * goal_limit
+        goal_feature = env.get_goal_feature(a * goal_limit)
         o_controller[goal_offset:goal_offset+goal_dim] = goal_feature
         o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
         a_controller = ac_controller.act(o_controller, deterministic, noise=noise)
@@ -353,9 +355,11 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     
     def get_random_action(o, deterministic=False):
         o_controller = o
-        a = 2 * np.random.randn(act_dim) - 1
-        a = 0.2 * a + 0.8 * (env.goal_pos[:2] - env.world.robot_pos()[:2])
-        goal_feature = env.get_goal_feature(a)
+        a = 2 * np.random.rand(act_dim) - 1
+
+        # a2 = 0.2 * a * goal_limit + 0.8 * (env.goal_pos[:2] - env.world.robot_pos()[:2])
+        # a2 = a / np.linalg.norm(a) * goal_limit
+        goal_feature = env.get_goal_feature(a * goal_limit)
         o_controller[goal_offset:goal_offset+goal_dim] = goal_feature
         o_controller = torch.FloatTensor(o_controller.reshape(1, -1)).to(device)
         a_controller = ac_controller.act(o_controller, deterministic, noise=noise)
