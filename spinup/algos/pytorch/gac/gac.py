@@ -138,6 +138,9 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         ac = torch.load(model_file).to(device)
     else:
         ac = actor_critic(obs_dim, act_dim, **ac_kwargs).to(device)
+
+    ac.obs_mean = env.controller.obs_mean
+    ac.obs_std  = env.controller.obs_std
     ac_targ = deepcopy(ac)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
@@ -149,12 +152,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     replay_buffer = core.ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
-    if model_file:
-        replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
-        replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
-        replay_buffer.obs_normalization = False
-        print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
-        print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
+
+    replay_buffer.obs_mean = ac.obs_mean.detach().cpu().numpy()
+    replay_buffer.obs_std  = ac.obs_std.detach().cpu().numpy()
+    replay_buffer.obs_normalization = False
+    print('replay_buffer.obs_mean = ' + str(replay_buffer.obs_mean))
+    print('replay_buffer.obs_std  = ' + str(replay_buffer.obs_std))
 
     # Count variables (protip: try to get a feel for how different size networks behave!)
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.q1, ac.q2])
