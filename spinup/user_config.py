@@ -12,7 +12,8 @@ DEFAULT_BACKEND = {
     'sac': 'pytorch',
     'gac': 'pytorch',
     'gsac': 'pytorch',
-    'shpo': 'pytorch'
+    'shpo': 'pytorch',
+    'gac4dqn': 'pytorch'
 }
 
 # Where experiment outputs are saved by default:
