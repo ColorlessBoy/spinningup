@@ -380,8 +380,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        if mix_reward and c > 0.0:
-            replay_buffer.store(o, a, -c * cost_scale, o2, d)
+        if mix_reward:
+            replay_buffer.store(o, a, r * reward_scale - c * cost_scale, o2, d)
         else:
             replay_buffer.store(o, a, r * reward_scale, o2, d)
 
