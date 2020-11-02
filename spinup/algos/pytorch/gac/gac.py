@@ -15,13 +15,14 @@ class ReplayBuffer:
     A simple FIFO experience replay buffer for SAC agents.
     """
 
-    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0):
+    def __init__(self, obs_dim, act_dim, size, obs_limit=5.0, reward_scale=5.0):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
+
         # For state normalization.
         self.total_num = 0
         self.obs_limit = 5.0
@@ -29,6 +30,12 @@ class ReplayBuffer:
         self.obs_square_mean = np.zeros(obs_dim, dtype=np.float32)
         self.obs_std = np.zeros(obs_dim, dtype=np.float32)
         self.obs_normalization = True
+
+        # For reward normalization.
+        self.rew_scale = reward_scale
+        self.rew_mean = np.zeros(1, dtype=np.float32)
+        self.rew_square_mean = np.zeros(1, dtype=np.float32)
+        self.rew_std = np.zeros(1, dtype=np.float32)
 
     def store(self, obs, act, rew, next_obs, done):
         self.obs_buf[self.ptr] = obs
@@ -45,17 +52,25 @@ class ReplayBuffer:
             self.obs_square_mean = self.obs_square_mean / self.total_num * (self.total_num - 1) + obs**2 / self.total_num
             self.obs_std = np.sqrt(self.obs_square_mean - self.obs_mean ** 2 + 1e-8)
 
+        self.rew_mean += (np.array(rew) - self.rew_mean) / self.total_num
+        self.rew_square_mean += (np.array(rew)**2 - self.rew_square_mean) / self.total_num
+        self.rew_std = np.sqrt(self.rew_square_mean - self.rew_mean ** 2 + 1e-4)
+
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_encoder(self.obs_buf[idxs]),
                      obs2=self.obs_encoder(self.obs2_buf[idxs]),
                      act=self.act_buf[idxs],
-                     rew=self.rew_buf[idxs],
+                     rew=self.rew_encoder(self.rew_buf[idxs]),
                      done=self.done_buf[idxs])
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in batch.items()}
     
     def obs_encoder(self, o):
         return ((np.array(o) - self.obs_mean)/(self.obs_std + 1e-8)).clip(-self.obs_limit, self.obs_limit)
+    
+    def rew_encoder(self, rew):
+        return np.array(rew)
+        # return ((np.array(rew) - self.rew_mean)/max(self.rew_std, 0.2)*self.rew_scale)
 
 def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=100, replay_size=int(1e6), gamma=0.99, 
