@@ -327,6 +327,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             loss_logalpha = compute_loss_logalpha(pi_info['LogPi'])
             loss_logalpha.backward()
             logalpha_optimizer.step()
+            nonlocal alpha
             alpha = torch.exp(log_alpha).detach()
 
         # Finally, update target networks by polyak averaging.
