@@ -13,7 +13,7 @@ import tensorflow as tf
 import torch
 import os.path as osp, time, atexit, os
 import warnings
-from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
+# from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
 
 color2num = dict(
@@ -27,6 +27,9 @@ color2num = dict(
     white=37,
     crimson=38
 )
+
+def proc_id():
+    return 0
 
 def colorize(string, color, bold=False, highlight=False):
     """
@@ -380,4 +383,4 @@ class EpochLogger(Logger):
         """
         v = self.epoch_dict[key]
         vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
-        return mpi_statistics_scalar(vals)
+        return vals # mpi_statistics_scalar(vals)

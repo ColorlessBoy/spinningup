@@ -1,7 +1,7 @@
 from spinup.user_config import DEFAULT_DATA_DIR, FORCE_DATESTAMP, \
                                DEFAULT_SHORTHAND, WAIT_BEFORE_LAUNCH
 from spinup.utils.logx import colorize
-from spinup.utils.mpi_tools import mpi_fork, msg
+# from spinup.utils.mpi_tools import mpi_fork, msg
 from spinup.utils.serialization_utils import convert_json
 import base64
 from copy import deepcopy
@@ -154,13 +154,13 @@ def call_experiment(exp_name, thunk, seed=0, num_cpu=1, data_dir=None,
             from osim.env import L2M2019Env
             env_name = kwargs['env_name']
             if env_name == 'L2M2019Env':
-                kwargs['env_fn'] = L2M2019Env
+                kwargs['env_fn'] = lambda : L2M2019Env(visualize=False)
             else:
                 kwargs['env_fn'] = lambda : gym.make(env_name)
             del kwargs['env_name']
 
         # Fork into multiple processes
-        mpi_fork(num_cpu)
+        # mpi_fork(num_cpu)
 
         # Run thunk
         thunk(**kwargs)
