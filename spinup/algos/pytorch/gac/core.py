@@ -10,6 +10,18 @@ def _weight_init(module):
     if isinstance(module, nn.Linear):
         torch.nn.init.xavier_normal_(module.weight, gain=0.01)
         module.bias.data.zero_()
+    
+def observation_flat(obs_raw):
+    obs = []
+    if isinstance(obs_raw, float):
+        obs.append(obs_raw)
+    elif isinstance(obs_raw, dict):
+        for value in obs_raw.values():
+            obs += observation_flat(value)
+    else:
+        for value in obs_raw:
+            obs += observation_flat(value)
+    return obs
 
 def combined_shape(length, shape=None):
     if shape is None:
