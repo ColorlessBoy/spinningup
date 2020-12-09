@@ -11,8 +11,6 @@ DEFAULT_BACKEND = {
     'td3': 'pytorch',
     'sac': 'pytorch',
     'gac': 'pytorch',
-    'gsac': 'pytorch',
-    'shpo': 'pytorch'
 }
 
 # Where experiment outputs are saved by default:
