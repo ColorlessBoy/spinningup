@@ -1,0 +1,15 @@
+nohup: ignoring input
+Traceback (most recent call last):
+  File "/home/peng/anaconda3/envs/opensim-rl/lib/python3.6/runpy.py", line 183, in _run_module_as_main
+    mod_name, mod_spec, code = _get_module_details(mod_name, _Error)
+  File "/home/peng/anaconda3/envs/opensim-rl/lib/python3.6/runpy.py", line 109, in _get_module_details
+    __import__(pkg_name)
+  File "/home/peng/Documents/spinningup/spinup/__init__.py", line 7, in <module>
+    from spinup.algos.tf1.ddpg.ddpg import ddpg as ddpg_tf1
+  File "/home/peng/Documents/spinningup/spinup/algos/tf1/ddpg/ddpg.py", line 7, in <module>
+    from spinup.utils.logx import EpochLogger
+  File "/home/peng/Documents/spinningup/spinup/utils/logx.py", line 16, in <module>
+    from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
+  File "/home/peng/Documents/spinningup/spinup/utils/mpi_tools.py", line 1, in <module>
+    from mpi4py import MPI
+ImportError: libmpi.so.20: cannot open shared object file: No such file or directory

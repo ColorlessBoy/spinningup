@@ -151,8 +151,12 @@ def call_experiment(exp_name, thunk, seed=0, num_cpu=1, data_dir=None,
         # Make 'env_fn' from 'env_name'
         if 'env_name' in kwargs:
             import gym
+            from osim.env import L2M2019Env
             env_name = kwargs['env_name']
-            kwargs['env_fn'] = lambda : gym.make(env_name)
+            if env_name == 'L2M2019Env':
+                kwargs['env_fn'] = L2M2019Env
+            else:
+                kwargs['env_fn'] = lambda : gym.make(env_name)
             del kwargs['env_name']
 
         # Fork into multiple processes

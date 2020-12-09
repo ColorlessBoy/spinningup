@@ -8,6 +8,7 @@ import time
 import spinup.algos.pytorch.gac.core as core
 from spinup.utils.logx import EpochLogger
 
+from osim.env import L2M2019Env
 
 class ReplayBuffer:
     """
@@ -164,12 +165,14 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     env.seed(seed)
     test_env.seed(seed)
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     print("obs_dim = {}, act_dim = {}".format(obs_dim, act_dim))
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
+    act_radiu = (env.action_space.high[0] - env.action_space.low[0]) / 2.0
+    act_mean  = (env.action_space.high[0] + env.action_space.low[0]) / 2.0
 
     # Create actor-critic module and target networks
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs).to(device)
@@ -332,7 +335,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(get_action(o, True) * act_limit)
+                o, r, d, _ = test_env.step(get_action(o, True) * act_radiu + act_mean)
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
@@ -349,12 +352,12 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
         if t <= start_steps:
-            a = env.action_space.sample() / act_limit
+            a = (env.action_space.sample() - act_mean) / act_radiu
         else:
             a = get_action(o, deterministic=False)
 
         # Step the env
-        o2, r, d, _ = env.step(a * act_limit)
+        o2, r, d, _ = env.step(a * act_radiu + act_mean)
         ep_ret += r
         ep_len += 1
 
