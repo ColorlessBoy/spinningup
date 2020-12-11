@@ -120,7 +120,8 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
-    axis_bound = env.action_space.high[0] + 0.01
+#   axis_bound = env.action_space.high[0] + 0.01
+    axis_bound = 1.0 + 0.01
 
 #   fig = plt.figure(figsize=(10, 10))
 #   ax  = Axes3D(fig)
