@@ -59,7 +59,7 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         polyak=0.995, polyak_pi=0.0, lr=1e-3, batch_size=100, start_steps=10000, 
         update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000, 
         logger_kwargs=dict(), save_freq=1, device='cuda', expand_batch=100, 
-        alpha=0.0, beta_start=0.0, beta_step=0.0, beta_max=0.0,
+        alpha=0.0, alpha_max=10.0, alpha_min=0.0, beta_start=0.0, beta_step=0.0, beta_max=0.0,
         reward_scale=1.0, kernel='energy', noise='gaussian'):
     """
     Generative Actor-Critic (GAC)
@@ -194,6 +194,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         auto_alpha = True
         alpha = -alpha
         log_alpha = torch.tensor(np.log(alpha), requires_grad=True, device=device)
+    
+    beta = beta_start
 
     # Set up function for computing SAC Q-losses
     def compute_loss_q(data):
@@ -383,11 +385,17 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Update handling
         if t >= update_after and t % update_every == 0:
             epoch = (t+1) // steps_per_epoch
-            beta = beta_start + beta_step * epoch
-            beta = min(beta, beta_max)
             for j in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 update(batch, beta)
+
+            # Change beta.
+            if alpha > alpha_max:
+                beta += beta_step
+                beta = min(beta, beta_max)
+            elif alpha < alpha_min:
+                beta -= beta_step
+                beta = max(beta, beta_start)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
@@ -415,9 +423,6 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('alpha', average_only=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
-
-            print("obs_mean = " + str(ac.obs_mean))
-            print("obs_std  = " + str(ac.obs_std))
 
 if __name__ == '__main__':
     import argparse
