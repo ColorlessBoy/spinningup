@@ -419,8 +419,8 @@ def gac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('Q2Vals', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
-            logger.log_tabular('mmd_entropy', average_only=True)
-            logger.log_tabular('alpha', average_only=True)
+            logger.log_tabular('mmd_entropy', with_min_and_max=True)
+            logger.log_tabular('alpha', with_min_and_max=True)
             logger.log_tabular('Time', time.time()-start_time)
             logger.dump_tabular()
 
